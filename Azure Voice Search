@@ -1,0 +1,297 @@
+/*
+ * Plugin Name: Azure Voice Search
+ * Description: Tích hợp tìm kiếm bằng giọng nói sử dụng Azure Cognitive Services Speech API cho ngôn ngữ Tiếng Việt.
+ * Version: 4.2 
+ * Author: Strong Anchor Tech (Updated by Gemini)
+ * Author URI: https://stronganchortech.com
+ */
+
+// ===================================================================================
+// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH AZURE (Không thay đổi)
+// ===================================================================================
+
+add_action('admin_menu', function() {
+    add_submenu_page('tools.php', 'Azure Speech Settings', 'Azure Speech', 'manage_options', 'azure-speech-settings', function() {
+        ?>
+        <div class="wrap">
+            <h2>Azure Cognitive Services Speech - Cài đặt</h2>
+            <p>Nhập thông tin Subscription Key và Region từ tài khoản Azure của bạn để sử dụng cho tính năng Tìm kiếm bằng giọng nói.</p>
+            <form method="post" action="options.php">
+                <?php
+                    settings_fields('azure_speech_settings_group');
+                    do_settings_sections('azure_speech_settings_group');
+                ?>
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">Azure Speech Key</th>
+                        <td><input type="text" name="azure_speech_key" value="<?php echo esc_attr(get_option('azure_speech_key')); ?>" size="60" /></td>
+                    </tr>
+                    <tr valign="top">
+                        <th scope="row">Azure Speech Region</th>
+                        <td><input type="text" name="azure_speech_region" value="<?php echo esc_attr(get_option('azure_speech_region')); ?>" size="20" placeholder="e.g., eastus, southeastasia" /></td>
+                    </tr>
+                </table>
+                <?php submit_button(); ?>
+            </form>
+        </div>
+        <?php
+    });
+});
+
+add_action('admin_init', function() {
+    register_setting('azure_speech_settings_group', 'azure_speech_key');
+    register_setting('azure_speech_settings_group', 'azure_speech_region');
+});
+
+// ===================================================================================
+// PHẦN 2: HÀM GỌI API AZURE (Đã cập nhật để gán cứng ngôn ngữ Tiếng Việt)
+// ===================================================================================
+
+/**
+ * Gửi file âm thanh đến Azure API để chuyển đổi thành văn bản.
+ * Ngôn ngữ được gán cứng là Tiếng Việt (vi-VN).
+ *
+ * @param string $audio_path Đường dẫn đến file âm thanh WAV.
+ * @return string Văn bản được chuyển đổi hoặc thông báo lỗi.
+ */
+function azure_transcribe_audio($audio_path) {
+    $speech_key = get_option('azure_speech_key');
+    $speech_region = get_option('azure_speech_region');
+
+    if (!$speech_key || !$speech_region) {
+        return '⚠️ Vui lòng cung cấp đầy đủ Azure Speech Key và Region trong cài đặt.';
+    }
+
+    // ⭐ THAY ĐỔI: Ngôn ngữ được gán cứng là 'vi-VN'.
+    $url = "https://{$speech_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=vi-VN";
+    
+    $headers = [
+        'Ocp-Apim-Subscription-Key: ' . $speech_key,
+        'Content-Type: audio/wav; codecs=audio/pcm; samplerate=16000'
+    ];
+
+    $audio_data = file_get_contents($audio_path);
+    if ($audio_data === false) {
+        return '❌ Không thể đọc file âm thanh.';
+    }
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $audio_data);
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code != 200 || !$response) {
+        return "❌ Lỗi từ Azure (HTTP {$http_code}): " . ($response ?: 'Không nhận được phản hồi.');
+    }
+
+    $result = json_decode($response, true);
+    
+    if (isset($result['RecognitionStatus']) && $result['RecognitionStatus'] === 'Success') {
+        return $result['DisplayText'];
+    } else {
+        return '❌ Không thể nhận dạng giọng nói. Hãy thử lại.';
+    }
+}
+
+// ===================================================================================
+// PHẦN 3: TÍNH NĂNG TÌM KIẾM BẰNG GIỌNG NÓI (Không thay đổi)
+// ===================================================================================
+
+add_shortcode('voice_search_button', function() {
+    ob_start();
+    ?>
+    <style>
+        #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; vertical-align: middle; }
+        #voice-search-btn img { width: 24px; height: 24px; transition: transform 0.2s ease; }
+        #voice-search-btn:hover img { transform: scale(1.15); }
+        #voice-search-btn.recording img { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+    </style>
+
+    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
+        <img src="https://img.icons8.com/ios-glyphs/60/FFFFFF/microphone.png" alt="Voice Search">
+    </button>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const voiceBtn = document.getElementById('voice-search-btn');
+        const searchInput = document.querySelector('input[name="s"]');
+
+        if (!voiceBtn || !searchInput) return;
+
+        let recorder, stream, audioContext;
+        let recording = false, silenceTimeout, recordingTimeout;
+        
+        const stopRecording = () => {
+            if (recorder && recorder.state === 'recording') { recorder.stop(); }
+            if (stream) { stream.getTracks().forEach(track => track.stop()); }
+            if (window.audioCheckInterval) { clearInterval(window.audioCheckInterval); }
+            if (audioContext && audioContext.state !== 'closed') { audioContext.close(); }
+            clearTimeout(silenceTimeout); clearTimeout(recordingTimeout);
+        };
+
+        voiceBtn.onclick = async () => {
+            if (recording) return;
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Trình duyệt của bạn không hỗ trợ ghi âm.'); return;
+            }
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                alert('Không thể truy cập micro. Vui lòng cấp quyền.'); return;
+            }
+            
+            recording = true;
+            
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            const checkSilence = () => {
+                analyser.getByteTimeDomainData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) { sum += Math.abs(dataArray[i] - 128); }
+                const average = sum / dataArray.length;
+                if (average > 1.5) { clearTimeout(silenceTimeout); silenceTimeout = setTimeout(stopRecording, 2000); }
+            };
+            window.audioCheckInterval = setInterval(checkSilence, 100);
+
+            const mimeType = ['audio/webm', 'audio/ogg'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+            recorder = new MediaRecorder(stream);
+            const chunks = [];
+            recorder.ondataavailable = e => chunks.push(e.data);
+            
+            recorder.onstop = () => {
+                recording = false;
+                voiceBtn.classList.remove('recording');
+
+                if (chunks.length === 0) { return; }
+
+                const blob = new Blob(chunks, { type: mimeType });
+                const fd = new FormData();
+                fd.append('action', 'voice_search');
+                fd.append('audio_data', blob, `search.webm`);
+
+                fetch('<?php echo admin_url('admin-ajax.php'); ?>', { method: 'POST', body: fd })
+                .then(res => res.json())
+                .then(res => {
+                    if (res.success) {
+                        searchInput.value = res.data.query;
+                        window.location.href = res.data.redirect_url;
+                    } else {
+                        console.error('Voice search error:', res.data);
+                    }
+                })
+                .catch(err => {
+                    console.error('Connection error:', err);
+                });
+            };
+
+            recorder.start();
+            voiceBtn.classList.add('recording');
+            
+            silenceTimeout = setTimeout(stopRecording, 2000); 
+            recordingTimeout = setTimeout(stopRecording, 8000);
+        };
+    });
+    </script>
+    <?php
+    return ob_get_clean();
+});
+
+add_action('wp_ajax_voice_search', 'handle_voice_search');
+add_action('wp_ajax_nopriv_voice_search', 'handle_voice_search');
+
+function handle_voice_search() {
+    if (!isset($_FILES['audio_data'])) {
+        wp_send_json_error('Thiếu dữ liệu âm thanh.');
+        return;
+    }
+
+    $upload = wp_handle_upload($_FILES['audio_data'], ['test_form' => false]);
+    if (!empty($upload['error'])) {
+        wp_send_json_error('Upload thất bại: ' . $upload['error']);
+        return;
+    }
+
+    $original_file_path = $upload['file'];
+    $wav_file_path = $original_file_path . '.wav';
+
+    if (empty(shell_exec('command -v ffmpeg'))) {
+        unlink($original_file_path);
+        wp_send_json_error('Lỗi máy chủ: FFmpeg chưa được cài đặt.');
+        return;
+    }
+
+    shell_exec("ffmpeg -i " . escapeshellarg($original_file_path) . " -acodec pcm_s16le -ar 16000 -ac 1 " . escapeshellarg($wav_file_path) . " -y");
+
+    if (!file_exists($wav_file_path) || filesize($wav_file_path) == 0) {
+        unlink($original_file_path);
+        wp_send_json_error('Không thể chuyển đổi file âm thanh.');
+        return;
+    }
+
+    $transcribed_text = trim(azure_transcribe_audio($wav_file_path));
+
+    unlink($original_file_path);
+    unlink($wav_file_path);
+
+    if (strpos($transcribed_text, '⚠️') === 0 || strpos($transcribed_text, '❌') === 0) {
+        wp_send_json_error($transcribed_text);
+        return;
+    }
+
+    if (empty($transcribed_text)) {
+        wp_send_json_error('Không nhận dạng được giọng nói.');
+        return;
+    }
+
+    $sanitized_query = sanitize_text_field(rtrim($transcribed_text, '.'));
+    $search_url = home_url('/?s=' . urlencode($sanitized_query));
+
+    wp_send_json_success(['query' => $sanitized_query, 'redirect_url' => $search_url]);
+}
+/**
+ * Tùy chỉnh truy vấn tìm kiếm của WordPress để chỉ tìm trong tiêu đề bài viết.
+ * * @param string $search   Câu lệnh SQL WHERE cho việc tìm kiếm.
+ * @param WP_Query $wp_query Đối tượng truy vấn hiện tại.
+ * @return string Câu lệnh SQL WHERE đã được sửa đổi.
+ */
+function __custom_search_by_title_only( $search, $wp_query ) {
+    global $wpdb;
+
+    // Chỉ áp dụng cho truy vấn tìm kiếm chính ở ngoài trang web (không phải trong admin).
+    if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
+        
+        $search_term = $wp_query->query_vars['s'];
+
+        if ( empty( $search_term ) ) {
+            return $search;
+        }
+
+        // Thay thế câu lệnh tìm kiếm mặc định.
+        // Chuẩn bị để tránh lỗi SQL Injection.
+        $search = $wpdb->prepare(
+            " AND {$wpdb->posts}.post_title LIKE %s ",
+            '%' . $wpdb->esc_like( $search_term ) . '%'
+        );
+
+        // Đảm bảo vẫn tìm kiếm các bài viết đã được xuất bản.
+        // WordPress thường tự xử lý phần này, nhưng thêm vào để chắc chắn.
+        $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+    }
+
+    return $search;
+}
+
+add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
