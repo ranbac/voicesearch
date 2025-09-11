@@ -118,7 +118,7 @@ add_shortcode('voice_search_button', function() {
         .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
 
         #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
-        #record-btn img { width: 28px; height: 28px; filter: invert(100%); }
+        #record-btn img { width: 28px; height: 28px;}
 
         /* Hiệu ứng micro nhấp nháy đỏ khi đang ghi âm */
         #record-btn.recording img {
