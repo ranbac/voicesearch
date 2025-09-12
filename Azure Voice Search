@@ -150,13 +150,13 @@ add_shortcode('voice_search_button', function() {
         <h3>Chọn ngôn ngữ</h3>
         <div class="lang-container">
             <button class="lang-btn active" data-lang="vi-VN">
-                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Việt</div>
+                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Tìm bài viết</div>
             </button>
             <button class="lang-btn" data-lang="zh-CN">
-                <img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">中文</div>
+                <img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">Tra từ</div>
             </button>
             <button class="lang-btn" data-lang="en-US">
-                <img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">English</div>
+                <img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">Tìm bài viết</div>
             </button>
         </div>
         <button id="record-btn" title="Ghi âm">
@@ -168,102 +168,146 @@ add_shortcode('voice_search_button', function() {
     </div>
 
     <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const popup = document.getElementById('voice-popup');
-        const voiceBtn = document.getElementById('voice-search-btn');
-        const recordBtn = document.getElementById('record-btn');
-        const langBtns = document.querySelectorAll('.lang-btn');
-        const closeBtn = document.getElementById('close-popup');
-        const resultBox = document.getElementById('result-box');
-        const countdownEl = document.getElementById('countdown');
-		const voicePopup = document.getElementById('voice-popup');
+document.addEventListener('DOMContentLoaded', () => {
+    const popup = document.getElementById('voice-popup');
+    const voiceBtn = document.getElementById('voice-search-btn');
+    const recordBtn = document.getElementById('record-btn');
+    const langBtns = document.querySelectorAll('.lang-btn');
+    const closeBtn = document.getElementById('close-popup');
+    const resultBox = document.getElementById('result-box');
+    const countdownEl = document.getElementById('countdown');
+    const voicePopup = document.getElementById('voice-popup');
 
-    // Nếu tìm thấy, di chuyển nó vào cuối thẻ body
     if (voicePopup) {
         document.body.appendChild(voicePopup);
     }
 
-        let selectedLang = "vi-VN";
-        let recorder, stream, chunks = [], recording = false, countdownTimer;
+    let selectedLang = "vi-VN";
+    let recorder, stream, chunks = [], recording = false;
+    
+    // Biến cho việc phát hiện giọng nói
+    let audioContext, analyser, source;
+    let silenceTimer = null;
+    const SILENCE_THRESHOLD = 0.01; // Ngưỡng im lặng, có thể cần điều chỉnh
+    const SILENCE_DELAY = 1000; // 1 giây im lặng để kích hoạt gửi
 
-        // Mở / Đóng popup
-        voiceBtn.onclick = () => popup.classList.add('active');
-        closeBtn.onclick = () => popup.classList.remove('active');
+    voiceBtn.onclick = () => popup.classList.add('active');
+    closeBtn.onclick = () => stopRecording(false); // Đóng popup cũng sẽ dừng ghi âm
 
-        // Chọn ngôn ngữ
-        langBtns.forEach(btn => {
-            btn.onclick = () => {
-                langBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                selectedLang = btn.dataset.lang;
-            };
-        });
-
-        // Ghi âm (auto stop sau 5s + countdown)
-        recordBtn.onclick = async () => {
-            if (!recording) {
-                try {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                } catch (err) {
-                    alert("Không truy cập được micro."); return;
-                }
-                recorder = new MediaRecorder(stream);
-                chunks = [];
-                recorder.ondataavailable = e => chunks.push(e.data);
-                recorder.onstop = () => {
-                    recordBtn.classList.remove("recording");
-                    countdownEl.textContent = "";
-                    const blob = new Blob(chunks, { type: recorder.mimeType });
-                    const fd = new FormData();
-                    fd.append("action", "voice_search");
-                    fd.append("language", selectedLang);
-                    fd.append("audio_data", blob, "recording.webm");
-
-                    resultBox.innerHTML = "⏳ Đang xử lý...";
-
-                    fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
-                    .then(res => res.json())
-                    .then(res => {
-                        if (res.success) {
-                            resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
-                            document.querySelectorAll('.result-item').forEach(item => {
-                                item.onclick = () => {
-                                    window.location.href = res.data.redirect_url;
-                                };
-                            });
-                        } else {
-                            resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
-                        }
-                    });
-                };
-                recorder.start();
-                recording = true;
-                recordBtn.classList.add("recording");
-
-                // Countdown 5s
-                let timeLeft = 5;
-                countdownEl.textContent = `⏱️ ${timeLeft}s`;
-                countdownTimer = setInterval(() => {
-                    timeLeft--;
-                    if (timeLeft > 0) {
-                        countdownEl.textContent = `⏱️ ${timeLeft}s`;
-                    } else {
-                        clearInterval(countdownTimer);
-                    }
-                }, 1000);
-
-                // ⏱️ Tự động dừng sau 5 giây
-                setTimeout(() => {
-                    if (recording) {
-                        recorder.stop();
-                        stream.getTracks().forEach(t => t.stop());
-                        recording = false;
-                    }
-                }, 5000);
-            }
+    langBtns.forEach(btn => {
+        btn.onclick = () => {
+            langBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedLang = btn.dataset.lang;
         };
     });
-    </script>
+
+    // Hàm dừng ghi âm và gửi dữ liệu
+    const stopRecordingAndSend = () => {
+        if (!recording) return;
+        
+        recorder.stop();
+        stream.getTracks().forEach(t => t.stop());
+        if (audioContext) audioContext.close();
+        
+        recording = false;
+        recordBtn.classList.remove("recording");
+        
+        clearTimeout(silenceTimer);
+    };
+
+    // Hàm phát hiện khoảng lặng
+    const detectSilence = () => {
+        if (!recording) return;
+
+        const dataArray = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(dataArray);
+        
+        let sumSquares = 0.0;
+        for (const amplitude of dataArray) {
+            sumSquares += amplitude * amplitude;
+        }
+        const volume = Math.sqrt(sumSquares / dataArray.length);
+
+        if (volume < SILENCE_THRESHOLD) {
+            if (!silenceTimer) {
+                silenceTimer = setTimeout(stopRecordingAndSend, SILENCE_DELAY);
+            }
+        } else {
+            clearTimeout(silenceTimer);
+            silenceTimer = null;
+        }
+
+        requestAnimationFrame(detectSilence);
+    };
+    
+    recordBtn.onclick = async () => {
+        if (recording) {
+            stopRecordingAndSend();
+            return;
+        }
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+            alert("Không truy cập được micro."); return;
+        }
+
+        // Thiết lập Web Audio API để phân tích
+        audioContext = new AudioContext();
+        analyser = audioContext.createAnalyser();
+        source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        recorder = new MediaRecorder(stream);
+        chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: recorder.mimeType });
+            if (blob.size === 0) {
+                 resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
+                 return;
+            }
+            
+            const fd = new FormData();
+            fd.append("action", "voice_search");
+            fd.append("language", selectedLang);
+            fd.append("audio_data", blob, "recording.webm");
+
+            resultBox.innerHTML = "⏳ Đang xử lý...";
+
+            fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
+            .then(res => res.json())
+            .then(res => {
+                if (res.success) {
+                    resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
+                    document.querySelectorAll('.result-item').forEach(item => {
+                        item.onclick = () => {
+                            window.location.href = res.data.redirect_url;
+                        };
+                    });
+                } else {
+                    resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
+                }
+            });
+        };
+
+        recorder.start();
+        recording = true;
+        recordBtn.classList.add("recording");
+       
+        detectSilence(); // Bắt đầu phát hiện khoảng lặng
+
+        // Giới hạn thời gian ghi âm tối đa 5 giây
+        setTimeout(() => {
+            if (recording) {
+                stopRecordingAndSend();
+            }
+        }, 5000);
+    };
+});
+</script>
     <?php
     return ob_get_clean();
 });
