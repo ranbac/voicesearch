@@ -102,9 +102,9 @@ add_shortcode('voice_search_button', function() {
 
         #voice-popup {
             display: none; position: fixed; 
-            top: calc(50% + 80px); left: 50%;
-            transform: translateX(-50%);
-            background: #fff; padding: 20px; border-radius: 12px;
+            top: 50% !important; left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.25);
             text-align: center; z-index: 9999; width: 340px;
         }
@@ -176,6 +176,12 @@ add_shortcode('voice_search_button', function() {
         const closeBtn = document.getElementById('close-popup');
         const resultBox = document.getElementById('result-box');
         const countdownEl = document.getElementById('countdown');
+		const voicePopup = document.getElementById('voice-popup');
+
+    // Nếu tìm thấy, di chuyển nó vào cuối thẻ body
+    if (voicePopup) {
+        document.body.appendChild(voicePopup);
+    }
 
         let selectedLang = "vi-VN";
         let recorder, stream, chunks = [], recording = false, countdownTimer;
