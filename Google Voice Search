@@ -1,0 +1,428 @@
+<?php
+/*
+ * Plugin Name: Google Voice Search (Optimized)
+ * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Google Cloud Speech-to-Text API. (Không yêu cầu FFmpeg)
+ * Version: 7.0
+ * Author: Strong Anchor Tech (Updated by GPT-5, Modified by Gemini)
+ * Author URI: https://stronganchortech.com
+ */
+
+// ===================================================================================
+// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH GOOGLE
+// ===================================================================================
+
+add_action('admin_menu', function() {
+    add_submenu_page('tools.php', 'Google Speech Settings', 'Google Speech', 'manage_options', 'google-speech-settings', function() {
+        ?>
+        <div class="wrap">
+            <h2>Google Cloud Speech-to-Text - Cài đặt</h2>
+            <p>Bạn cần tạo một <strong>API Key</strong> từ Google Cloud Console và kích hoạt "Speech-to-Text API".</p>
+            <form method="post" action="options.php">
+                <?php
+                    settings_fields('google_speech_settings_group');
+                    do_settings_sections('google_speech_settings_group');
+                ?>
+                <table class="form-table">
+                    <tr valign="top">
+                        <th scope="row">Google Speech API Key</th>
+                        <td><input type="text" name="google_speech_api_key" value="<?php echo esc_attr(get_option('google_speech_api_key')); ?>" size="60" /></td>
+                    </tr>
+                </table>
+                <?php submit_button(); ?>
+            </form>
+        </div>
+        <?php
+    });
+});
+
+add_action('admin_init', function() {
+    register_setting('google_speech_settings_group', 'google_speech_api_key');
+});
+
+// ===================================================================================
+// PHẦN 2: GỌI API GOOGLE (Phiên bản tối ưu, không cần FFmpeg)
+// ===================================================================================
+
+function google_transcribe_audio($audio_path, $language = 'vi-VN', $encoding = 'LINEAR16') {
+    $api_key = get_option('google_speech_api_key');
+
+    if (!$api_key) {
+        return '⚠️ Vui lòng cung cấp Google Speech API Key.';
+    }
+
+    $url = "https://speech.googleapis.com/v1/speech:recognize?key={$api_key}";
+    
+    $audio_data = file_get_contents($audio_path);
+    if ($audio_data === false) {
+        return '❌ Không thể đọc file âm thanh.';
+    }
+
+    $base64_audio = base64_encode($audio_data);
+
+    // Cấu hình cơ bản
+    $config = [
+        'encoding' => $encoding,
+        'languageCode' => $language,
+    ];
+
+    // Chỉ định rõ sampleRate và channelCount cho âm thanh thô (LINEAR16)
+    // Google sẽ tự phát hiện các thông số này cho định dạng nén như WEBM_OPUS
+    if ($encoding === 'LINEAR16') {
+        $config['sampleRateHertz'] = 16000;
+        $config['audioChannelCount'] = 1;
+    }
+    
+    // Yêu cầu Google tự động thêm dấu câu
+    $config['enableAutomaticPunctuation'] = true; 
+
+    $payload = [
+        'config' => $config,
+        'audio' => [
+            'content' => $base64_audio
+        ]
+    ];
+
+    $json_payload = json_encode($payload);
+
+    $headers = [
+        'Content-Type: application/json',
+        'Content-Length: ' . strlen($json_payload)
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $json_payload);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code != 200 || !$response) {
+        return "❌ Lỗi từ Google (HTTP {$http_code}): " . ($response ?: 'Không có phản hồi.');
+    }
+
+    $result = json_decode($response, true);
+
+    // Xử lý lỗi do Google API trả về (ví dụ: API key sai, API chưa bật)
+    if (isset($result['error'])) {
+         return "❌ Lỗi từ Google: " . $result['error']['message'];
+    }
+    
+    // Kiểm tra xem có kết quả không
+    if (isset($result['results'][0]['alternatives'][0]['transcript'])) {
+        return $result['results'][0]['alternatives'][0]['transcript'];
+    } else {
+        // Có thể API trả về 200 nhưng không nhận dạng được gì
+        return '❌ Không thể nhận dạng giọng nói.';
+    }
+}
+
+
+// ===================================================================================
+// ===================================================================================
+// PHẦN 3: SHORTCODE HIỂN THỊ NÚT MICRO + POPUP (Không thay đổi)
+// ===================================================================================
+
+add_shortcode('voice_search_button', function() {
+    ob_start();
+    ?>
+    <style>
+        #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; }
+        #voice-search-btn img { width: 28px; height: 28px; }
+
+        #voice-popup {
+            display: none; position: fixed; 
+            top: 50% !important; left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            text-align: center; z-index: 9999; width: 340px;
+        }
+        #voice-popup.active { display: block; }
+        #voice-popup h3 { margin-top: 0; font-size: 18px; }
+
+        .lang-container { display: flex; justify-content: center; gap: 14px; margin-bottom: 12px; }
+        .lang-btn { border: none; background: none; cursor: pointer; text-align: center; }
+        .lang-btn img { width: 48px; height: 32px; border: 2px solid transparent; border-radius: 6px; transition: 0.2s; }
+        .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
+        .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
+
+        #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
+        #record-btn img { width: 28px; height: 28px;}
+
+        /* Hiệu ứng micro nhấp nháy đỏ khi đang ghi âm */
+        #record-btn.recording img {
+            filter: invert(29%) sepia(93%) saturate(7486%) hue-rotate(356deg) brightness(97%) contrast(116%);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.6; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        #countdown { font-size: 14px; color: #0073aa; margin-top: 6px; }
+
+        #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
+
+        #result-box { margin-top: 15px; font-size: 15px; color: #222; }
+        .result-item { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; margin-top: 6px; background: #f9f9f9; }
+        .result-item:hover { background: #eee; }
+    </style>
+
+    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
+        <img src="https://img.icons8.com/ios-glyphs/60/FFFFFF/microphone.png" alt="Voice Search">
+    </button>
+
+    <div id="voice-popup">
+        <h3>Chọn ngôn ngữ</h3>
+        <div class="lang-container">
+            <button class="lang-btn active" data-lang="vi-VN">
+                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Tìm bài viết</div>
+            </button>
+            <button class="lang-btn" data-lang="zh-CN">
+                <img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">Tra từ</div>
+            </button>
+            <button class="lang-btn" data-lang="en-US">
+                <img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">Tìm bài viết</div>
+            </button>
+        </div>
+        <button id="record-btn" title="Ghi âm">
+            <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
+        </button>
+        <div id="countdown"></div>
+        <div id="result-box"></div>
+        <button id="close-popup">Đóng</button>
+    </div>
+
+    <script>
+document.addEventListener('DOMContentLoaded', () => {
+    const popup = document.getElementById('voice-popup');
+    const voiceBtn = document.getElementById('voice-search-btn');
+    const recordBtn = document.getElementById('record-btn');
+    const langBtns = document.querySelectorAll('.lang-btn');
+    const closeBtn = document.getElementById('close-popup');
+    const resultBox = document.getElementById('result-box');
+    const countdownEl = document.getElementById('countdown');
+    const voicePopup = document.getElementById('voice-popup');
+
+    if (voicePopup) {
+        document.body.appendChild(voicePopup);
+    }
+
+    let selectedLang = "vi-VN";
+    let recorder, stream, chunks = [], recording = false;
+    
+    // Biến cho việc phát hiện giọng nói
+    let audioContext, analyser, source;
+    let silenceTimer = null;
+    const SILENCE_THRESHOLD = 0.01; // Ngưỡng im lặng, có thể cần điều chỉnh
+    const SILENCE_DELAY = 1000; // 1 giây im lặng để kích hoạt gửi
+
+    voiceBtn.onclick = () => popup.classList.add('active');
+    closeBtn.onclick = () => stopRecording(false); // Đóng popup cũng sẽ dừng ghi âm
+
+    langBtns.forEach(btn => {
+        btn.onclick = () => {
+            langBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedLang = btn.dataset.lang;
+        };
+    });
+
+    // Hàm dừng ghi âm và gửi dữ liệu
+    const stopRecordingAndSend = () => {
+        if (!recording) return;
+        
+        recorder.stop();
+        stream.getTracks().forEach(t => t.stop());
+        if (audioContext) audioContext.close();
+        
+        recording = false;
+        recordBtn.classList.remove("recording");
+        
+        clearTimeout(silenceTimer);
+    };
+
+    // Hàm phát hiện khoảng lặng
+    const detectSilence = () => {
+        if (!recording) return;
+
+        const dataArray = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(dataArray);
+        
+        let sumSquares = 0.0;
+        for (const amplitude of dataArray) {
+            sumSquares += amplitude * amplitude;
+        }
+        const volume = Math.sqrt(sumSquares / dataArray.length);
+
+        if (volume < SILENCE_THRESHOLD) {
+            if (!silenceTimer) {
+                silenceTimer = setTimeout(stopRecordingAndSend, SILENCE_DELAY);
+            }
+        } else {
+            clearTimeout(silenceTimer);
+            silenceTimer = null;
+        }
+
+        requestAnimationFrame(detectSilence);
+    };
+    
+    recordBtn.onclick = async () => {
+        if (recording) {
+            stopRecordingAndSend();
+            return;
+        }
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+            alert("Không truy cập được micro."); return;
+        }
+
+        // Thiết lập Web Audio API để phân tích
+        audioContext = new AudioContext();
+        analyser = audioContext.createAnalyser();
+        source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        // Báo cho MediaRecorder sử dụng 'audio/webm' nếu có thể
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+                         ? 'audio/webm;codecs=opus' 
+                         : 'audio/ogg;codecs=opus';
+
+        recorder = new MediaRecorder(stream, { mimeType: mimeType });
+        chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: recorder.mimeType });
+            if (blob.size === 0) {
+                resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
+                return;
+            }
+            
+            const fd = new FormData();
+            fd.append("action", "voice_search");
+            fd.append("language", selectedLang);
+            // Gửi tệp với phần mở rộng .webm để máy chủ dễ nhận biết (dù không bắt buộc)
+            fd.append("audio_data", blob, "recording.webm");
+
+            resultBox.innerHTML = "⏳ Đang xử lý...";
+
+            fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
+            .then(res => res.json())
+            .then(res => {
+                if (res.success) {
+                    resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
+                    document.querySelectorAll('.result-item').forEach(item => {
+                        item.onclick = () => {
+                            window.location.href = res.data.redirect_url;
+                        };
+                    });
+                } else {
+                    resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
+                }
+            });
+        };
+
+        recorder.start();
+        recording = true;
+        recordBtn.classList.add("recording");
+        
+        detectSilence(); // Bắt đầu phát hiện khoảng lặng
+
+        // Giới hạn thời gian ghi âm tối đa 5 giây
+        setTimeout(() => {
+            if (recording) {
+                stopRecordingAndSend();
+            }
+        }, 5000);
+    };
+});
+</script>
+    <?php
+    return ob_get_clean();
+});
+// ===================================================================================
+// PHẦN 4: AJAX XỬ LÝ AUDIO & GỌI GOOGLE (Đã loại bỏ FFmpeg)
+// ===================================================================================
+
+add_action('wp_ajax_voice_search', 'handle_voice_search');
+add_action('wp_ajax_nopriv_voice_search', 'handle_voice_search');
+
+function handle_voice_search() {
+    if (!isset($_FILES['audio_data'])) {
+        wp_send_json_error('Thiếu dữ liệu âm thanh.');
+        return;
+    }
+
+    $language = isset($_POST['language']) ? sanitize_text_field($_POST['language']) : 'vi-VN';
+
+    // Xử lý tệp tải lên
+    $upload = wp_handle_upload($_FILES['audio_data'], ['test_form' => false]);
+    if (!empty($upload['error'])) {
+        wp_send_json_error('Upload thất bại: ' . $upload['error']);
+        return;
+    }
+
+    $original_file_path = $upload['file'];
+
+    // *** ĐÃ LOẠI BỎ HOÀN TOÀN KHỐI LỆNH FFmpeg ***
+    
+    // Trình duyệt (MediaRecorder) đã tạo ra tệp 'audio/webm' (hoặc ogg)
+    // Chúng ta sẽ gửi thẳng tệp này và báo cho Google biết đó là WEBM_OPUS
+    // (Google API đủ thông minh để xử lý cả .ogg và .webm khi dùng 'WEBM_OPUS')
+    
+    // *** THAY ĐỔI CHÍNH: Gọi hàm Google với định dạng 'WEBM_OPUS' ***
+    $transcribed_text = trim(google_transcribe_audio($original_file_path, $language, 'WEBM_OPUS'));
+
+    // Dọn dẹp tệp gốc đã tải lên
+    unlink($original_file_path);
+
+    if (strpos($transcribed_text, '⚠️') === 0 || strpos($transcribed_text, '❌') === 0) {
+        wp_send_json_error($transcribed_text);
+        return;
+    }
+
+    if (empty($transcribed_text)) {
+        wp_send_json_error('Không nhận dạng được giọng nói.');
+        return;
+    }
+
+    // Vì chúng ta đã bật 'enableAutomaticPunctuation' trong Phần 2,
+    // văn bản có thể chứa dấu câu (ví dụ: "xin chào.").
+    // Chúng ta vẫn loại bỏ chúng để tạo URL tìm kiếm sạch.
+    $clean_text = preg_replace('/[[:punct:]]/u', '', $transcribed_text);
+    $clean_text = preg_replace('/\s+/u', ' ', $clean_text);
+    $sanitized_query = sanitize_text_field(trim($clean_text));
+
+    $search_url = home_url('/?s=' . urlencode($sanitized_query));
+
+    wp_send_json_success(['query' => $sanitized_query, 'redirect_url' => $search_url]);
+}
+
+// ===================================================================================
+// PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ (Không thay đổi)
+// ===================================================================================
+
+function __custom_search_by_title_only( $search, $wp_query ) {
+    global $wpdb;
+    if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
+        $search_term = $wp_query->query_vars['s'];
+        if ( empty( $search_term ) ) {
+            return $search;
+        }
+        $search = $wpdb->prepare(
+            " AND {$wpdb->posts}.post_title LIKE %s ",
+            '%' . $wpdb->esc_like( $search_term ) . '%'
+        );
+        $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+    }
+    return $search;
+}
+add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
