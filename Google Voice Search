@@ -1,4 +1,3 @@
-<?php
 /*
  * Plugin Name: Google Voice Search (Optimized)
  * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Google Cloud Speech-to-Text API. (Không yêu cầu FFmpeg)
@@ -407,22 +406,50 @@ function handle_voice_search() {
 }
 
 // ===================================================================================
-// PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ (Không thay đổi)
+// ===================================================================================
+// PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ (Phiên bản thông minh, hỗ trợ từ khóa rời rạc)
 // ===================================================================================
 
-function __custom_search_by_title_only( $search, $wp_query ) {
+function __custom_search_by_title_smart( $search, $wp_query ) {
     global $wpdb;
+    // Chỉ áp dụng cho tìm kiếm ở frontend
     if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
+        
         $search_term = $wp_query->query_vars['s'];
+        
         if ( empty( $search_term ) ) {
             return $search;
         }
-        $search = $wpdb->prepare(
-            " AND {$wpdb->posts}.post_title LIKE %s ",
-            '%' . $wpdb->esc_like( $search_term ) . '%'
-        );
-        $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+
+        // Tách cụm từ tìm kiếm thành các từ riêng lẻ
+        $search_terms = explode( ' ', $search_term );
+        
+        // Xây dựng một mệnh đề WHERE mới
+        $search_conditions = [];
+        
+        foreach ( $search_terms as $term ) {
+            $term = trim( $term );
+            if ( !empty($term) ) {
+                // Thêm điều kiện: post_title PHẢI chứa (LIKE) MỖI từ
+                $search_conditions[] = $wpdb->prepare(
+                    "{$wpdb->posts}.post_title LIKE %s",
+                    '%' . $wpdb->esc_like( $term ) . '%'
+                );
+            }
+        }
+        
+        if ( !empty($search_conditions) ) {
+            // Nối tất cả các điều kiện bằng 'AND'
+            // và đảm bảo chỉ lấy bài viết 'publish'
+            $search = " AND ( " . implode( ' AND ', $search_conditions ) . " )";
+            $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+        }
     }
     return $search;
 }
-add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
+
+// Xóa bộ lọc cũ (nếu bạn còn mã cũ)
+// remove_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
+
+// Thêm bộ lọc thông minh mới
+add_filter( 'posts_search', '__custom_search_by_title_smart', 10, 2 );
