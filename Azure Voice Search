@@ -1,8 +1,8 @@
 /*
- * Plugin Name: Azure Voice Search
- * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Azure Cognitive Services Speech API.
- * Version: 5.6
- * Author: Strong Anchor Tech (Updated by GPT-5)
+ * Plugin Name: Azure Voice Search (No FFmpeg)
+ * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Azure Cognitive Services Speech API. Chuyển đổi âm thanh được thực hiện tại trình duyệt.
+ * Version: 6.0
+ * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
 
@@ -89,8 +89,7 @@ function azure_transcribe_audio($audio_path, $language = 'vi-VN') {
 }
 
 // ===================================================================================
-// ===================================================================================
-// PHẦN 3: SHORTCODE HIỂN THỊ NÚT MICRO + POPUP (Auto stop 5s + icon nhấp nháy)
+// PHẦN 3: SHORTCODE HIỂN THỊ NÚT MICRO + POPUP (Client-side Conversion)
 // ===================================================================================
 
 add_shortcode('voice_search_button', function() {
@@ -131,21 +130,17 @@ add_shortcode('voice_search_button', function() {
             100% { transform: scale(1); opacity: 1; }
         }
 
-        #countdown { font-size: 14px; color: #0073aa; margin-top: 6px; }
-
         #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
 
-        #result-box { margin-top: 15px; font-size: 15px; color: #222; }
+        #result-box { margin-top: 15px; font-size: 15px; color: #222; min-height: 24px; }
         .result-item { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; margin-top: 6px; background: #f9f9f9; }
         .result-item:hover { background: #eee; }
     </style>
 
-    <!-- Nút micro mở popup -->
     <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
-        <img src="https://img.icons8.com/ios-glyphs/60/FFFFFF/microphone.png" alt="Voice Search">
+        <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Voice Search">
     </button>
 
-    <!-- Popup -->
     <div id="voice-popup">
         <h3>Chọn ngôn ngữ</h3>
         <div class="lang-container">
@@ -162,157 +157,194 @@ add_shortcode('voice_search_button', function() {
         <button id="record-btn" title="Ghi âm">
             <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
         </button>
-        <div id="countdown"></div>
         <div id="result-box"></div>
         <button id="close-popup">Đóng</button>
     </div>
 
     <script>
-document.addEventListener('DOMContentLoaded', () => {
-    const popup = document.getElementById('voice-popup');
-    const voiceBtn = document.getElementById('voice-search-btn');
-    const recordBtn = document.getElementById('record-btn');
-    const langBtns = document.querySelectorAll('.lang-btn');
-    const closeBtn = document.getElementById('close-popup');
-    const resultBox = document.getElementById('result-box');
-    const countdownEl = document.getElementById('countdown');
-    const voicePopup = document.getElementById('voice-popup');
+    document.addEventListener('DOMContentLoaded', () => {
+        const popup = document.getElementById('voice-popup');
+        const voiceBtn = document.getElementById('voice-search-btn');
+        const recordBtn = document.getElementById('record-btn');
+        const langBtns = document.querySelectorAll('.lang-btn');
+        const closeBtn = document.getElementById('close-popup');
+        const resultBox = document.getElementById('result-box');
+        const voicePopup = document.getElementById('voice-popup');
 
-    if (voicePopup) {
-        document.body.appendChild(voicePopup);
-    }
-
-    let selectedLang = "vi-VN";
-    let recorder, stream, chunks = [], recording = false;
-    
-    // Biến cho việc phát hiện giọng nói
-    let audioContext, analyser, source;
-    let silenceTimer = null;
-    const SILENCE_THRESHOLD = 0.01; // Ngưỡng im lặng, có thể cần điều chỉnh
-    const SILENCE_DELAY = 1000; // 1 giây im lặng để kích hoạt gửi
-
-    voiceBtn.onclick = () => popup.classList.add('active');
-    closeBtn.onclick = () => stopRecording(false); // Đóng popup cũng sẽ dừng ghi âm
-
-    langBtns.forEach(btn => {
-        btn.onclick = () => {
-            langBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            selectedLang = btn.dataset.lang;
-        };
-    });
-
-    // Hàm dừng ghi âm và gửi dữ liệu
-    const stopRecordingAndSend = () => {
-        if (!recording) return;
-        
-        recorder.stop();
-        stream.getTracks().forEach(t => t.stop());
-        if (audioContext) audioContext.close();
-        
-        recording = false;
-        recordBtn.classList.remove("recording");
-        
-        clearTimeout(silenceTimer);
-    };
-
-    // Hàm phát hiện khoảng lặng
-    const detectSilence = () => {
-        if (!recording) return;
-
-        const dataArray = new Float32Array(analyser.fftSize);
-        analyser.getFloatTimeDomainData(dataArray);
-        
-        let sumSquares = 0.0;
-        for (const amplitude of dataArray) {
-            sumSquares += amplitude * amplitude;
+        if (voicePopup) {
+            document.body.appendChild(voicePopup);
         }
-        const volume = Math.sqrt(sumSquares / dataArray.length);
 
-        if (volume < SILENCE_THRESHOLD) {
-            if (!silenceTimer) {
-                silenceTimer = setTimeout(stopRecordingAndSend, SILENCE_DELAY);
+        let selectedLang = "vi-VN";
+        let recorder, stream, chunks = [], recording = false;
+        const MAX_RECORD_TIME = 3000; // Ghi âm tối đa 8 giây
+
+        voiceBtn.onclick = () => popup.classList.add('active');
+        closeBtn.onclick = () => stopRecording(true); 
+
+        langBtns.forEach(btn => {
+            btn.onclick = () => {
+                langBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedLang = btn.dataset.lang;
+            };
+        });
+
+        // =================================================================
+        // CÁC HÀM XỬ LÝ ÂM THANH PHÍA TRÌNH DUYỆT
+        // =================================================================
+
+        function bufferToWav(buffer, targetSampleRate) {
+            const numOfChan = buffer.numberOfChannels;
+            const a_length = buffer.length;
+            const resampled_length = Math.round(a_length * targetSampleRate / buffer.sampleRate);
+            const result = new Float32Array(resampled_length);
+            
+            const spring_factor = (a_length - 1) / (resampled_length - 1);
+            result[0] = buffer.getChannelData(0)[0];
+            for (let i = 1; i < resampled_length - 1; i++) {
+                const tmp = i * spring_factor;
+                const before = Math.floor(tmp);
+                const after = Math.ceil(tmp);
+                const atPoint = tmp - before;
+                result[i] = buffer.getChannelData(0)[before] + (buffer.getChannelData(0)[after] - buffer.getChannelData(0)[before]) * atPoint;
             }
-        } else {
-            clearTimeout(silenceTimer);
-            silenceTimer = null;
+            result[resampled_length-1] = buffer.getChannelData(0)[a_length-1];
+
+            const pcm_result = new Int16Array(resampled_length);
+            for (let i = 0; i < resampled_length; i++) {
+                let s = Math.max(-1, Math.min(1, result[i]));
+                pcm_result[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+
+            const wav_buffer = new ArrayBuffer(44 + pcm_result.length * 2);
+            const view = new DataView(wav_buffer);
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + pcm_result.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true); // Mono
+            view.setUint32(24, targetSampleRate, true);
+            view.setUint32(28, targetSampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, pcm_result.length * 2, true);
+
+            for (let i = 0; i < pcm_result.length; i++) {
+                view.setInt16(44 + i * 2, pcm_result[i], true);
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
         }
 
-        requestAnimationFrame(detectSilence);
-    };
-    
-    recordBtn.onclick = async () => {
-        if (recording) {
-            stopRecordingAndSend();
-            return;
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
         }
 
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch (err) {
-            alert("Không truy cập được micro."); return;
-        }
+        const stopRecording = (forceClosePopup) => {
+            if (!recording && forceClosePopup) {
+                popup.classList.remove('active');
+                return;
+            }
+            if (!recording) return;
 
-        // Thiết lập Web Audio API để phân tích
-        audioContext = new AudioContext();
-        analyser = audioContext.createAnalyser();
-        source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-
-        recorder = new MediaRecorder(stream);
-        chunks = [];
-        recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.stop();
+            stream.getTracks().forEach(t => t.stop());
+            
+            recording = false;
+            recordBtn.classList.remove("recording");
+            
+            if (forceClosePopup) {
+                popup.classList.remove('active');
+            }
+        };
         
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: recorder.mimeType });
-            if (blob.size === 0) {
-                 resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
-                 return;
+        recordBtn.onclick = async () => {
+            if (recording) {
+                stopRecording(false);
+                return;
+            }
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                resultBox.innerHTML = '<div style="color:red;">Không truy cập được micro.</div>';
+                return;
             }
             
-            const fd = new FormData();
-            fd.append("action", "voice_search");
-            fd.append("language", selectedLang);
-            fd.append("audio_data", blob, "recording.webm");
+            recording = true;
+            recordBtn.classList.add("recording");
+            resultBox.innerHTML = "🎤 Đang lắng nghe...";
+            chunks = [];
 
-            resultBox.innerHTML = "⏳ Đang xử lý...";
-
-            fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
-            .then(res => res.json())
-            .then(res => {
-                if (res.success) {
-                    resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
-                    document.querySelectorAll('.result-item').forEach(item => {
-                        item.onclick = () => {
-                            window.location.href = res.data.redirect_url;
-                        };
-                    });
-                } else {
-                    resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
+            recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = e => chunks.push(e.data);
+            
+            recorder.onstop = async () => {
+                if (chunks.length === 0 || chunks[0].size === 0) {
+                    resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
+                    return;
                 }
-            });
+
+                resultBox.innerHTML = "⏳ Đang chuyển đổi âm thanh...";
+
+                const webmBlob = new Blob(chunks, { type: 'audio/webm' });
+                const tempAudioContext = new AudioContext();
+                const arrayBuffer = await webmBlob.arrayBuffer();
+                const audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
+                
+                const wavBlob = bufferToWav(audioBuffer, 16000);
+                tempAudioContext.close();
+
+                const fd = new FormData();
+                fd.append("action", "voice_search");
+                fd.append("language", selectedLang);
+                fd.append("audio_data", wavBlob, "recording.wav");
+
+                resultBox.innerHTML = "⏳ Đang xử lý...";
+
+                fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
+                .then(res => res.json())
+                .then(res => {
+                    if (res.success) {
+                        resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
+                        document.querySelectorAll('.result-item').forEach(item => {
+                            item.onclick = () => {
+                                const searchInput = document.querySelector('input[name="s"]');
+                                if(searchInput && searchInput.form){
+                                    searchInput.value = res.data.query;
+                                    searchInput.form.submit();
+                                } else {
+                                    window.location.href = res.data.redirect_url;
+                                }
+                            };
+                        });
+                    } else {
+                        resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
+                    }
+                })
+                .catch(err => {
+                    resultBox.innerHTML = `<div style="color:red;">Lỗi kết nối. Vui lòng thử lại.</div>`;
+                });
+            };
+
+            recorder.start();
+            setTimeout(() => { if(recording) stopRecording(false); }, MAX_RECORD_TIME);
         };
-
-        recorder.start();
-        recording = true;
-        recordBtn.classList.add("recording");
-       
-        detectSilence(); // Bắt đầu phát hiện khoảng lặng
-
-        // Giới hạn thời gian ghi âm tối đa 5 giây
-        setTimeout(() => {
-            if (recording) {
-                stopRecordingAndSend();
-            }
-        }, 5000);
-    };
-});
-</script>
+    });
+    </script>
     <?php
     return ob_get_clean();
 });
+
 // ===================================================================================
-// PHẦN 4: AJAX XỬ LÝ AUDIO & GỌI AZURE
+// PHẦN 4: AJAX XỬ LÝ AUDIO & GỌI AZURE (ĐÃ BỎ FFmpeg)
 // ===================================================================================
 
 add_action('wp_ajax_voice_search', 'handle_voice_search');
@@ -332,26 +364,12 @@ function handle_voice_search() {
         return;
     }
 
-    $original_file_path = $upload['file'];
-    $wav_file_path = $original_file_path . '.wav';
+    $wav_file_path = $upload['file'];
 
-    if (empty(shell_exec('command -v ffmpeg'))) {
-        unlink($original_file_path);
-        wp_send_json_error('Lỗi máy chủ: FFmpeg chưa được cài đặt.');
-        return;
-    }
-
-    shell_exec("ffmpeg -i " . escapeshellarg($original_file_path) . " -acodec pcm_s16le -ar 16000 -ac 1 " . escapeshellarg($wav_file_path) . " -y");
-
-    if (!file_exists($wav_file_path) || filesize($wav_file_path) == 0) {
-        unlink($original_file_path);
-        wp_send_json_error('Không thể chuyển đổi file âm thanh.');
-        return;
-    }
-
+    // Gọi thẳng Azure vì file đã là định dạng WAV
     $transcribed_text = trim(azure_transcribe_audio($wav_file_path, $language));
 
-    unlink($original_file_path);
+    // Xóa file tạm sau khi xử lý
     unlink($wav_file_path);
 
     if (strpos($transcribed_text, '⚠️') === 0 || strpos($transcribed_text, '❌') === 0) {
@@ -364,7 +382,6 @@ function handle_voice_search() {
         return;
     }
 
-    // Bỏ toàn bộ dấu câu (cho mọi ngôn ngữ)
     $clean_text = preg_replace('/[[:punct:]]/u', '', $transcribed_text);
     $clean_text = preg_replace('/\s+/u', ' ', $clean_text);
     $sanitized_query = sanitize_text_field(trim($clean_text));
@@ -378,19 +395,24 @@ function handle_voice_search() {
 // PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ
 // ===================================================================================
 
-function __custom_search_by_title_only( $search, $wp_query ) {
+function __custom_search_by_title_smart( $search, $wp_query ) {
     global $wpdb;
     if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
         $search_term = $wp_query->query_vars['s'];
-        if ( empty( $search_term ) ) {
-            return $search;
+        if ( empty( $search_term ) ) return $search;
+        $search_terms = explode( ' ', $search_term );
+        $search_conditions = [];
+        foreach ( $search_terms as $term ) {
+            $term = trim( $term );
+            if ( !empty($term) ) {
+                $search_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", '%' . $wpdb->esc_like( $term ) . '%');
+            }
         }
-        $search = $wpdb->prepare(
-            " AND {$wpdb->posts}.post_title LIKE %s ",
-            '%' . $wpdb->esc_like( $search_term ) . '%'
-        );
-        $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+        if ( !empty($search_conditions) ) {
+            $search = " AND ( " . implode( ' AND ', $search_conditions ) . " )";
+            $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
+        }
     }
     return $search;
 }
-add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
+add_filter( 'posts_search', '__custom_search_by_title_smart', 10, 2 );
