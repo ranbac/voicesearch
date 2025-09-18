@@ -1,13 +1,13 @@
-/**
- * Plugin Name: Google Voice Search (Hybrid Optimized)
- * Description: Tìm kiếm bằng giọng nói sử dụng Google Speech-to-Text API. Tự động xử lý định dạng cho mọi trình duyệt.
- * Version: 7.2
- * Author: Strong Anchor Tech (Updated by GPT-5, Modified by Gemini)
+/*
+ * Plugin Name: Google Voice Search (No FFmpeg)
+ * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Google Cloud Speech-to-Text API. Chuyển đổi âm thanh được thực hiện tại trình duyệt.
+ * Version: 7.0
+ * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
 
 // ===================================================================================
-// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH GOOGLE (Không thay đổi)
+// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH GOOGLE
 // ===================================================================================
 
 add_action('admin_menu', function() {
@@ -15,7 +15,7 @@ add_action('admin_menu', function() {
         ?>
         <div class="wrap">
             <h2>Google Cloud Speech-to-Text - Cài đặt</h2>
-            <p>Bạn cần tạo một <strong>API Key</strong> từ Google Cloud Console và kích hoạt "Speech-to-Text API".</p>
+            <p>Bạn cần bật <strong>Cloud Speech-to-Text API</strong> trong Google Cloud Console và tạo một API Key.</p>
             <form method="post" action="options.php">
                 <?php
                     settings_fields('google_speech_settings_group');
@@ -23,8 +23,8 @@ add_action('admin_menu', function() {
                 ?>
                 <table class="form-table">
                     <tr valign="top">
-                        <th scope="row">Google Speech API Key</th>
-                        <td><input type="text" name="google_speech_api_key" value="<?php echo esc_attr(get_option('google_speech_api_key')); ?>" size="60" /></td>
+                        <th scope="row">Google Cloud API Key</th>
+                        <td><input type="text" name="google_api_key" value="<?php echo esc_attr(get_option('google_api_key')); ?>" size="60" /></td>
                     </tr>
                 </table>
                 <?php submit_button(); ?>
@@ -35,54 +35,72 @@ add_action('admin_menu', function() {
 });
 
 add_action('admin_init', function() {
-    register_setting('google_speech_settings_group', 'google_speech_api_key');
+    register_setting('google_speech_settings_group', 'google_api_key');
 });
 
 // ===================================================================================
-// PHẦN 2: GỌI API GOOGLE (Không thay đổi)
+// PHẦN 2: GỌI API GOOGLE (có tham số ngôn ngữ)
 // ===================================================================================
 
-function google_transcribe_audio($audio_path, $language = 'vi-VN', $encoding = 'LINEAR16') {
-    $api_key = get_option('google_speech_api_key');
-    if (!$api_key) return '⚠️ Vui lòng cung cấp Google Speech API Key.';
+function google_transcribe_audio($audio_path, $language = 'vi-VN') {
+    $api_key = get_option('google_api_key');
 
-    $url = "https://speech.googleapis.com/v1/speech:recognize?key={$api_key}";
-    $audio_data = @file_get_contents($audio_path);
-    if ($audio_data === false) return '❌ Không thể đọc file âm thanh.';
+    if (!$api_key) {
+        return '⚠️ Vui lòng cung cấp Google Cloud API Key.';
+    }
+
+    $url = "https://speech.googleapis.com/v1/speech:recognize?key=" . $api_key;
+    
+    $audio_data = file_get_contents($audio_path);
+    if ($audio_data === false) {
+        return '❌ Không thể đọc file âm thanh.';
+    }
 
     $base64_audio = base64_encode($audio_data);
-    $config = ['encoding' => $encoding, 'languageCode' => $language];
-    if ($encoding === 'LINEAR16') {
-        $config['sampleRateHertz'] = 16000;
-        $config['audioChannelCount'] = 1;
-    }
-    $config['enableAutomaticPunctuation'] = true;
-    $payload = ['config' => $config, 'audio' => ['content' => $base64_audio]];
-    $json_payload = json_encode($payload);
-    $headers = ['Content-Type: application/json', 'Content-Length: ' . strlen($json_payload)];
 
+    $request_body = [
+        'config' => [
+            'encoding' => 'LINEAR16',
+            'sampleRateHertz' => 16000,
+            'languageCode' => $language,
+        ],
+        'audio' => [
+            'content' => $base64_audio,
+        ]
+    ];
+    
     $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $url,
-        CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $json_payload,
-        CURLOPT_SSL_VERIFYPEER => true
-    ]);
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($request_body));
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    if ($http_code != 200 || !$response) return "❌ Lỗi từ Google (HTTP {$http_code}): " . ($response ?: 'Không có phản hồi.');
+    if ($http_code != 200 || !$response) {
+        $error_details = '';
+        if ($response) {
+            $error_data = json_decode($response, true);
+            if (isset($error_data['error']['message'])) {
+                $error_details = $error_data['error']['message'];
+            }
+        }
+        return "❌ Lỗi từ Google (HTTP {$http_code}): " . ($error_details ?: 'Không có phản hồi.');
+    }
+
     $result = json_decode($response, true);
-    if (isset($result['error'])) return "❌ Lỗi từ Google: " . $result['error']['message'];
-    if (isset($result['results'][0]['alternatives'][0]['transcript'])) return $result['results'][0]['alternatives'][0]['transcript'];
-    return '❌ Không thể nhận dạng giọng nói.';
+    if (isset($result['results'][0]['alternatives'][0]['transcript'])) {
+        return $result['results'][0]['alternatives'][0]['transcript'];
+    } else {
+        return '❌ Không thể nhận dạng giọng nói.';
+    }
 }
 
+
 // ===================================================================================
-// PHẦN 3: SHORTCODE VÀ JAVASCRIPT (Không thay đổi so với v7.1)
+// PHẦN 3: SHORTCODE HIỂN THỊ NÚT MICRO + POPUP (Client-side Conversion)
 // ===================================================================================
 
 add_shortcode('voice_search_button', function() {
@@ -91,33 +109,65 @@ add_shortcode('voice_search_button', function() {
     <style>
         #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; }
         #voice-search-btn img { width: 28px; height: 28px; }
-        #voice-popup { display: none; position: fixed; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; background: #f0f0f0 !important; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.25); text-align: center; z-index: 9999; width: 340px; }
+
+        #voice-popup {
+            display: none; position: fixed; 
+            top: 50% !important; left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+            background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            text-align: center; z-index: 9999; width: 340px;
+        }
         #voice-popup.active { display: block; }
         #voice-popup h3 { margin-top: 0; font-size: 18px; }
+
         .lang-container { display: flex; justify-content: center; gap: 14px; margin-bottom: 12px; }
         .lang-btn { border: none; background: none; cursor: pointer; text-align: center; }
         .lang-btn img { width: 48px; height: 32px; border: 2px solid transparent; border-radius: 6px; transition: 0.2s; }
         .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
         .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
+
         #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
         #record-btn img { width: 28px; height: 28px;}
-        #record-btn.recording img { filter: invert(29%) sepia(93%) saturate(7486%) hue-rotate(356deg) brightness(97%) contrast(116%); animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.6; } 100% { transform: scale(1); opacity: 1; } }
+
+        /* Hiệu ứng micro nhấp nháy đỏ khi đang ghi âm */
+        #record-btn.recording img {
+            filter: invert(29%) sepia(93%) saturate(7486%) hue-rotate(356deg) brightness(97%) contrast(116%);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.6; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
         #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
-        #result-box { margin-top: 15px; font-size: 15px; color: #222; }
+
+        #result-box { margin-top: 15px; font-size: 15px; color: #222; min-height: 24px; }
         .result-item { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; margin-top: 6px; background: #f9f9f9; }
         .result-item:hover { background: #eee; }
     </style>
 
-    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói"><img src="https://img.icons8.com/ios-glyphs/60/FFFFFF/microphone.png" alt="Voice Search"></button>
+    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
+        <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Voice Search">
+    </button>
+
     <div id="voice-popup">
         <h3>Chọn ngôn ngữ</h3>
         <div class="lang-container">
-            <button class="lang-btn active" data-lang="vi-VN"><img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Tìm bài viết</div></button>
-            <button class="lang-btn" data-lang="zh-CN"><img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">Tra từ</div></button>
-            <button class="lang-btn" data-lang="en-US"><img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">Tìm bài viết</div></button>
+            <button class="lang-btn active" data-lang="vi-VN">
+                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Tìm bài viết</div>
+            </button>
+            <button class="lang-btn" data-lang="zh-CN">
+                <img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">Tra từ</div>
+            </button>
+            <button class="lang-btn" data-lang="en-US">
+                <img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">Tìm bài viết</div>
+            </button>
         </div>
-        <button id="record-btn" title="Ghi âm"><img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record"></button>
+        <button id="record-btn" title="Ghi âm">
+            <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
+        </button>
         <div id="result-box"></div>
         <button id="close-popup">Đóng</button>
     </div>
@@ -130,17 +180,19 @@ add_shortcode('voice_search_button', function() {
         const langBtns = document.querySelectorAll('.lang-btn');
         const closeBtn = document.getElementById('close-popup');
         const resultBox = document.getElementById('result-box');
-        if (popup) { document.body.appendChild(popup); }
+        const voicePopup = document.getElementById('voice-popup');
 
-        let selectedLang = "vi-VN", recorder, stream, chunks = [], recording = false;
-        let audioContext, analyser, source, silenceTimer = null;
-        const SILENCE_THRESHOLD = 0.01, SILENCE_DELAY = 1000;
+        if (voicePopup) {
+            document.body.appendChild(voicePopup);
+        }
+
+        let selectedLang = "vi-VN";
+        let recorder, stream, chunks = [], recording = false;
+        const MAX_RECORD_TIME = 3000; // Ghi âm tối đa 3 giây
 
         voiceBtn.onclick = () => popup.classList.add('active');
-        closeBtn.onclick = () => {
-            popup.classList.remove('active');
-            if (recording) stopRecordingAndSend();
-        };
+        closeBtn.onclick = () => stopRecording(true); 
+
         langBtns.forEach(btn => {
             btn.onclick = () => {
                 langBtns.forEach(b => b.classList.remove('active'));
@@ -149,86 +201,152 @@ add_shortcode('voice_search_button', function() {
             };
         });
 
-        const getSupportedMimeType = () => {
-            const mimeTypes = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
-            for (const mimeType of mimeTypes) if (MediaRecorder.isTypeSupported(mimeType)) return mimeType;
-            return '';
-        };
+        // =================================================================
+        // CÁC HÀM XỬ LÝ ÂM THANH PHÍA TRÌNH DUYỆT
+        // =================================================================
 
-        const stopRecordingAndSend = () => {
+        function bufferToWav(buffer, targetSampleRate) {
+            const numOfChan = buffer.numberOfChannels;
+            const a_length = buffer.length;
+            const resampled_length = Math.round(a_length * targetSampleRate / buffer.sampleRate);
+            const result = new Float32Array(resampled_length);
+            
+            const spring_factor = (a_length - 1) / (resampled_length - 1);
+            result[0] = buffer.getChannelData(0)[0];
+            for (let i = 1; i < resampled_length - 1; i++) {
+                const tmp = i * spring_factor;
+                const before = Math.floor(tmp);
+                const after = Math.ceil(tmp);
+                const atPoint = tmp - before;
+                result[i] = buffer.getChannelData(0)[before] + (buffer.getChannelData(0)[after] - buffer.getChannelData(0)[before]) * atPoint;
+            }
+            result[resampled_length-1] = buffer.getChannelData(0)[a_length-1];
+
+            const pcm_result = new Int16Array(resampled_length);
+            for (let i = 0; i < resampled_length; i++) {
+                let s = Math.max(-1, Math.min(1, result[i]));
+                pcm_result[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+
+            const wav_buffer = new ArrayBuffer(44 + pcm_result.length * 2);
+            const view = new DataView(wav_buffer);
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + pcm_result.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true); // Mono
+            view.setUint32(24, targetSampleRate, true);
+            view.setUint32(28, targetSampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, pcm_result.length * 2, true);
+
+            for (let i = 0; i < pcm_result.length; i++) {
+                view.setInt16(44 + i * 2, pcm_result[i], true);
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        const stopRecording = (forceClosePopup) => {
+            if (!recording && forceClosePopup) {
+                popup.classList.remove('active');
+                return;
+            }
             if (!recording) return;
+
             recorder.stop();
             stream.getTracks().forEach(t => t.stop());
-            if (audioContext && audioContext.state !== 'closed') audioContext.close();
+            
             recording = false;
             recordBtn.classList.remove("recording");
-            clearTimeout(silenceTimer);
-        };
-
-        const detectSilence = () => {
-            if (!recording || !analyser) return;
-            const dataArray = new Float32Array(analyser.fftSize);
-            analyser.getFloatTimeDomainData(dataArray);
-            let sumSquares = 0.0;
-            for (const amplitude of dataArray) sumSquares += amplitude * amplitude;
-            const volume = Math.sqrt(sumSquares / dataArray.length);
-            if (volume < SILENCE_THRESHOLD) {
-                if (!silenceTimer) silenceTimer = setTimeout(stopRecordingAndSend, SILENCE_DELAY);
-            } else {
-                clearTimeout(silenceTimer);
-                silenceTimer = null;
+            
+            if (forceClosePopup) {
+                popup.classList.remove('active');
             }
-            requestAnimationFrame(detectSilence);
         };
         
         recordBtn.onclick = async () => {
-            if (recording) { stopRecordingAndSend(); return; }
+            if (recording) {
+                stopRecording(false);
+                return;
+            }
+
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            } catch (err) { alert("Không thể truy cập micro. Vui lòng cấp quyền và thử lại."); return; }
-
-            const mimeType = getSupportedMimeType();
-            if (!mimeType) { alert('Trình duyệt của bạn không hỗ trợ chức năng ghi âm.'); return; }
-
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            analyser = audioContext.createAnalyser();
-            source = audioContext.createMediaStreamSource(stream);
-            source.connect(analyser);
-            recorder = new MediaRecorder(stream, { mimeType: mimeType });
+            } catch (err) {
+                resultBox.innerHTML = '<div style="color:red;">Không truy cập được micro.</div>';
+                return;
+            }
+            
+            recording = true;
+            recordBtn.classList.add("recording");
+            resultBox.innerHTML = "🎤 Đang lắng nghe...";
             chunks = [];
+
+            recorder = new MediaRecorder(stream);
             recorder.ondataavailable = e => chunks.push(e.data);
             
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: mimeType });
-                if (blob.size < 100) { resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>'; return; }
+            recorder.onstop = async () => {
+                if (chunks.length === 0 || chunks[0].size === 0) {
+                    resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
+                    return;
+                }
+
+                resultBox.innerHTML = "⏳ Đang chuyển đổi âm thanh...";
+
+                const webmBlob = new Blob(chunks, { type: 'audio/webm' });
+                const tempAudioContext = new AudioContext();
+                const arrayBuffer = await webmBlob.arrayBuffer();
+                const audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
                 
-                const fileExtension = mimeType.split(';')[0].split('/')[1];
-                const fileName = `recording.${fileExtension}`;
+                const wavBlob = bufferToWav(audioBuffer, 16000);
+                tempAudioContext.close();
+
                 const fd = new FormData();
                 fd.append("action", "voice_search");
                 fd.append("language", selectedLang);
-                fd.append("audio_data", blob, fileName);
-                fd.append("mime_type", mimeType);
+                fd.append("audio_data", wavBlob, "recording.wav");
 
                 resultBox.innerHTML = "⏳ Đang xử lý...";
+
                 fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
                 .then(res => res.json())
                 .then(res => {
                     if (res.success) {
                         resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
                         document.querySelectorAll('.result-item').forEach(item => {
-                            item.onclick = () => { window.location.href = res.data.redirect_url; };
+                            item.onclick = () => {
+                                const searchInput = document.querySelector('input[name="s"]');
+                                if(searchInput && searchInput.form){
+                                    searchInput.value = res.data.query;
+                                    searchInput.form.submit();
+                                } else {
+                                    window.location.href = res.data.redirect_url;
+                                }
+                            };
                         });
                     } else {
                         resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
                     }
+                })
+                .catch(err => {
+                    resultBox.innerHTML = `<div style="color:red;">Lỗi kết nối. Vui lòng thử lại.</div>`;
                 });
             };
+
             recorder.start();
-            recording = true;
-            recordBtn.classList.add("recording");
-            detectSilence();
-            setTimeout(() => { if (recording) stopRecordingAndSend(); }, 8000);
+            setTimeout(() => { if(recording) stopRecording(false); }, MAX_RECORD_TIME);
         };
     });
     </script>
@@ -236,9 +354,8 @@ add_shortcode('voice_search_button', function() {
     return ob_get_clean();
 });
 
-
 // ===================================================================================
-// PHẦN 4: AJAX XỬ LÝ AUDIO (LOGIC HYBRID - ĐÃ SỬA LỖI)
+// PHẦN 4: AJAX XỬ LÝ AUDIO & GỌI GOOGLE (ĐÃ BỎ FFmpeg)
 // ===================================================================================
 
 add_action('wp_ajax_voice_search', 'handle_voice_search');
@@ -251,7 +368,6 @@ function handle_voice_search() {
     }
 
     $language = isset($_POST['language']) ? sanitize_text_field($_POST['language']) : 'vi-VN';
-    $mime_type = isset($_POST['mime_type']) ? sanitize_text_field($_POST['mime_type']) : 'audio/webm';
 
     $upload = wp_handle_upload($_FILES['audio_data'], ['test_form' => false]);
     if (!empty($upload['error'])) {
@@ -259,43 +375,13 @@ function handle_voice_search() {
         return;
     }
 
-    $original_file_path = $upload['file'];
-    $transcribed_text = '';
+    $wav_file_path = $upload['file'];
 
-    // === CẢI TIẾN: LOGIC HYBRID ===
-    // Nếu là file mp4 từ trình duyệt cũ, dùng FFmpeg để chuyển đổi
-    if (strpos($mime_type, 'audio/mp4') !== false) {
-        
-        // Kiểm tra xem FFmpeg có được cài đặt không
-        if (empty(shell_exec('command -v ffmpeg'))) {
-            unlink($original_file_path);
-            wp_send_json_error('Lỗi: FFmpeg là bắt buộc để xử lý âm thanh từ trình duyệt này (ví dụ: Safari cũ). Vui lòng liên hệ quản trị viên hosting.');
-            return;
-        }
+    // Gọi thẳng Google vì file đã là định dạng WAV
+    $transcribed_text = trim(google_transcribe_audio($wav_file_path, $language));
 
-        $wav_file_path = $original_file_path . '.wav';
-        // Chuyển đổi file mp4 sang wav (LINEAR16) mà Google hiểu
-        shell_exec("ffmpeg -i " . escapeshellarg($original_file_path) . " -acodec pcm_s16le -ar 16000 -ac 1 " . escapeshellarg($wav_file_path) . " -y");
-
-        if (!file_exists($wav_file_path) || filesize($wav_file_path) == 0) {
-             unlink($original_file_path);
-             wp_send_json_error('Không thể chuyển đổi file âm thanh bằng FFmpeg.');
-             return;
-        }
-
-        // Gọi Google API với file wav đã chuyển đổi
-        $transcribed_text = trim(google_transcribe_audio($wav_file_path, $language, 'LINEAR16'));
-
-        // Dọn dẹp cả hai file
-        unlink($original_file_path);
-        unlink($wav_file_path);
-
-    } else {
-        // Nếu là định dạng hiện đại (webm, ogg), gửi trực tiếp
-        $transcribed_text = trim(google_transcribe_audio($original_file_path, $language, 'WEBM_OPUS'));
-        unlink($original_file_path);
-    }
-    // === KẾT THÚC LOGIC HYBRID ===
+    // Xóa file tạm sau khi xử lý
+    unlink($wav_file_path);
 
     if (strpos($transcribed_text, '⚠️') === 0 || strpos($transcribed_text, '❌') === 0) {
         wp_send_json_error($transcribed_text);
@@ -310,13 +396,14 @@ function handle_voice_search() {
     $clean_text = preg_replace('/[[:punct:]]/u', '', $transcribed_text);
     $clean_text = preg_replace('/\s+/u', ' ', $clean_text);
     $sanitized_query = sanitize_text_field(trim($clean_text));
+
     $search_url = home_url('/?s=' . urlencode($sanitized_query));
 
     wp_send_json_success(['query' => $sanitized_query, 'redirect_url' => $search_url]);
 }
 
 // ===================================================================================
-// PHẦN 5: BỘ LỌC TÌM KIẾM (Không thay đổi)
+// PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ
 // ===================================================================================
 
 function __custom_search_by_title_smart( $search, $wp_query ) {
