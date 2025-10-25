@@ -1,7 +1,7 @@
 /*
  * Plugin Name: Azure Voice Search (No FFmpeg)
- * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung / Anh) sử dụng Azure Cognitive Services Speech API. Chuyển đổi âm thanh được thực hiện tại trình duyệt.
- * Version: 6.0
+ * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung) sử dụng Azure Cognitive Services Speech API. Chuyển đổi âm thanh được thực hiện tại trình duyệt.
+ * Version: 6.1
  * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
@@ -54,7 +54,7 @@ function azure_transcribe_audio($audio_path, $language = 'vi-VN') {
         return '⚠️ Vui lòng cung cấp Azure Speech Key và Region.';
     }
 
-    $url = "https://{$speech_region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language={$language}";
+    $url = "https://{$speech_region}.stt.speech.microsoft.com/speech/recognition/interactive/cognitiveservices/v1?language={$language}";
     
     $headers = [
         'Ocp-Apim-Subscription-Key: ' . $speech_key,
@@ -116,6 +116,16 @@ add_shortcode('voice_search_button', function() {
         .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
         .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
 
+        /* CSS CHO GHI CHÚ MỚI THÊM */
+        .lang-note {
+            font-size: 10px;
+            color: #555;
+            margin-top: 2px;
+            font-style: italic;
+            line-height: 1.2;
+            min-height: 12px; /* Giữ chiều cao tối thiểu */
+        }
+
         #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
         #record-btn img { width: 28px; height: 28px;}
 
@@ -138,22 +148,26 @@ add_shortcode('voice_search_button', function() {
     </style>
 
     <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
-        <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Voice Search">
+        <img src="https://img.icons8.com/?size=60&id=ZNyAxEX9vDxS&format=png&color=FFFFFF" alt="Voice Search">
     </button>
 
     <div id="voice-popup">
         <h3>Chọn ngôn ngữ</h3>
         <div class="lang-container">
+            
             <button class="lang-btn active" data-lang="vi-VN">
-                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt"><div class="lang-label">Tìm bài viết</div>
+                <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt">
+                <div class="lang-label">Tìm bài viết</div>
+                <div class="lang-note">Ví dụ:Từ vựng HSK 4, ngữ pháp HSK 4, bài tập HSK 4, bài giảng HSK4...</div>
             </button>
+            
             <button class="lang-btn" data-lang="zh-CN">
-                <img src="https://flagcdn.com/cn.svg" alt="中文"><div class="lang-label">Tra từ</div>
+                <img src="https://flagcdn.com/cn.svg" alt="中文">
+                <div class="lang-label">Tra từ</div>
+                <div class="lang-note">&nbsp;</div>
             </button>
-            <button class="lang-btn" data-lang="en-US">
-                <img src="https://flagcdn.com/gb.svg" alt="English"><div class="lang-label">Tìm bài viết</div>
-            </button>
-        </div>
+            
+            </div>
         <button id="record-btn" title="Ghi âm">
             <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
         </button>
@@ -177,7 +191,7 @@ add_shortcode('voice_search_button', function() {
 
         let selectedLang = "vi-VN";
         let recorder, stream, chunks = [], recording = false;
-        const MAX_RECORD_TIME = 3000; // Ghi âm tối đa 8 giây
+        const MAX_RECORD_TIME = 3000; // Ghi âm tối đa 8 giây
 
         voiceBtn.onclick = () => popup.classList.add('active');
         closeBtn.onclick = () => stopRecording(true); 
