@@ -1,13 +1,13 @@
 /*
- * Plugin Name: Azure Voice Search (No FFmpeg)
- * Description: Tìm kiếm bằng giọng nói (Tiếng Việt / Trung) sử dụng Azure Cognitive Services Speech API. Chuyển đổi âm thanh được thực hiện tại trình duyệt.
- * Version: 6.1
+ * Plugin Name: Azure Voice Search (Streaming SDK)
+ * Description: Tìm kiếm giọng nói thời gian thực (Real-time Streaming) sử dụng Azure Speech SDK JS.
+ * Version: 7.1
  * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
 
 // ===================================================================================
-// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH AZURE
+// PHẦN 1: CÀI ĐẶT & CẤU HÌNH (GIỮ NGUYÊN)
 // ===================================================================================
 
 add_action('admin_menu', function() {
@@ -43,56 +43,53 @@ add_action('admin_init', function() {
 });
 
 // ===================================================================================
-// PHẦN 2: GỌI API AZURE (có tham số ngôn ngữ)
+// PHẦN 2: API LẤY TOKEN (MỚI)
+// Thay vì gửi audio, ta gửi yêu cầu lấy Token để JS kết nối trực tiếp
 // ===================================================================================
 
-function azure_transcribe_audio($audio_path, $language = 'vi-VN') {
+add_action('wp_ajax_azure_get_token', 'azure_get_token_callback');
+add_action('wp_ajax_nopriv_azure_get_token', 'azure_get_token_callback');
+
+function azure_get_token_callback() {
     $speech_key = get_option('azure_speech_key');
     $speech_region = get_option('azure_speech_region');
 
     if (!$speech_key || !$speech_region) {
-        return '⚠️ Vui lòng cung cấp Azure Speech Key và Region.';
+        wp_send_json_error('Chưa cấu hình API Key/Region.');
     }
 
-    $url = "https://{$speech_region}.stt.speech.microsoft.com/speech/recognition/interactive/cognitiveservices/v1?language={$language}";
-    
-    $headers = [
-        'Ocp-Apim-Subscription-Key: ' . $speech_key,
-        'Content-Type: audio/wav; codecs=audio/pcm; samplerate=16000'
-    ];
+    $url = "https://{$speech_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken";
 
-    $audio_data = file_get_contents($audio_path);
-    if ($audio_data === false) {
-        return '❌ Không thể đọc file âm thanh.';
-    }
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $audio_data);
-    $response = curl_exec($ch);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+        'Ocp-Apim-Subscription-Key: ' . $speech_key,
+        'Content-Length: 0'
+    ));
+
+    $token = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    if ($http_code != 200 || !$response) {
-        return "❌ Lỗi từ Azure (HTTP {$http_code}): " . ($response ?: 'Không có phản hồi.');
+    if ($http_code != 200 || !$token) {
+        wp_send_json_error("Lỗi lấy Token từ Azure (HTTP $http_code)");
     }
 
-    $result = json_decode($response, true);
-    if (isset($result['RecognitionStatus']) && $result['RecognitionStatus'] === 'Success') {
-        return $result['DisplayText'];
-    } else {
-        return '❌ Không thể nhận dạng giọng nói.';
-    }
+    wp_send_json_success([
+        'token' => $token,
+        'region' => $speech_region
+    ]);
 }
 
 // ===================================================================================
-// PHẦN 3: SHORTCODE HIỂN THỊ NÚT MICRO + POPUP (Client-side Conversion)
+// PHẦN 3: SHORTCODE & UI (CẬP NHẬT: CLICK VÀO CHỮ MỚI TÌM)
 // ===================================================================================
 
 add_shortcode('voice_search_button', function() {
+    // Load Azure Speech SDK từ CDN của Microsoft
+    wp_enqueue_script('azure-speech-sdk', 'https://aka.ms/csspeech/jsbrowserpackageraw', [], null, true);
+    
     ob_start();
     ?>
     <style>
@@ -115,36 +112,49 @@ add_shortcode('voice_search_button', function() {
         .lang-btn img { width: 48px; height: 32px; border: 2px solid transparent; border-radius: 6px; transition: 0.2s; }
         .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
         .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
+        .lang-note { font-size: 10px; color: #555; margin-top: 2px; font-style: italic; line-height: 1.2; min-height: 12px; }
 
-        /* CSS CHO GHI CHÚ MỚI THÊM */
-        .lang-note {
-            font-size: 10px;
-            color: #555;
-            margin-top: 2px;
-            font-style: italic;
-            line-height: 1.2;
-            min-height: 12px; /* Giữ chiều cao tối thiểu */
-        }
-
-        #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
+        #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; transition: all 0.3s; }
         #record-btn img { width: 28px; height: 28px;}
 
-        /* Hiệu ứng micro nhấp nháy đỏ khi đang ghi âm */
-        #record-btn.recording img {
-            filter: invert(29%) sepia(93%) saturate(7486%) hue-rotate(356deg) brightness(97%) contrast(116%);
-            animation: pulse 1s infinite;
+        /* Hiệu ứng Pulse khi đang nghe */
+        #record-btn.listening {
+            background: #d63638;
+            box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7);
+            animation: pulse-red 1.5s infinite;
         }
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.2); opacity: 0.6; }
-            100% { transform: scale(1); opacity: 1; }
+        @keyframes pulse-red {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(214, 54, 56, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0); }
         }
 
         #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
 
-        #result-box { margin-top: 15px; font-size: 15px; color: #222; min-height: 24px; }
-        .result-item { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; margin-top: 6px; background: #f9f9f9; }
-        .result-item:hover { background: #eee; }
+        #result-box { margin-top: 15px; font-size: 16px; color: #222; min-height: 24px; font-weight: 500; }
+        
+        /* Style cho kết quả click được */
+        .result-final-link { 
+            color: #0073aa; 
+            font-weight: bold; 
+            font-size: 20px;
+            text-decoration: none; 
+            cursor: pointer; 
+            padding: 5px 10px;
+            display: inline-block;
+            transition: 0.2s;
+            border: 1px dashed #0073aa;
+            border-radius: 5px;
+            background: rgba(0, 115, 170, 0.05);
+        }
+        .result-final-link:hover {
+            background: #0073aa;
+            color: #fff;
+        }
+
+        .result-interim { color: #888; }
+        .click-guide { font-size: 11px; color: #d63638; margin-top: 5px; font-style: italic; animation: fadeIn 1s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
 
     <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
@@ -154,24 +164,23 @@ add_shortcode('voice_search_button', function() {
     <div id="voice-popup">
         <h3>Chọn ngôn ngữ</h3>
         <div class="lang-container">
-            
             <button class="lang-btn active" data-lang="vi-VN">
                 <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt">
                 <div class="lang-label">Tìm bài viết</div>
-                <div class="lang-note">Ví dụ:ngữ pháp HSK 4...</div>
+                <div class="lang-note">Ví dụ: ngữ pháp HSK 4...</div>
             </button>
-            
             <button class="lang-btn" data-lang="zh-CN">
                 <img src="https://flagcdn.com/cn.svg" alt="中文">
                 <div class="lang-label">Tra từ</div>
                 <div class="lang-note">&nbsp;</div>
             </button>
-            
-            </div>
-        <button id="record-btn" title="Ghi âm">
+        </div>
+
+        <button id="record-btn" title="Bắt đầu nói">
             <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
         </button>
-        <div id="result-box"></div>
+
+        <div id="result-box">Bấm micro để nói...</div>
         <button id="close-popup">Đóng</button>
     </div>
 
@@ -183,18 +192,17 @@ add_shortcode('voice_search_button', function() {
         const langBtns = document.querySelectorAll('.lang-btn');
         const closeBtn = document.getElementById('close-popup');
         const resultBox = document.getElementById('result-box');
-        const voicePopup = document.getElementById('voice-popup');
-
-        if (voicePopup) {
-            document.body.appendChild(voicePopup);
-        }
 
         let selectedLang = "vi-VN";
-        let recorder, stream, chunks = [], recording = false;
-        const MAX_RECORD_TIME = 3000; // Ghi âm tối đa 8 giây
+        let recognizer;
+        let isListening = false;
+
+        if (document.getElementById('voice-popup')) {
+            document.body.appendChild(document.getElementById('voice-popup'));
+        }
 
         voiceBtn.onclick = () => popup.classList.add('active');
-        closeBtn.onclick = () => stopRecording(true); 
+        closeBtn.onclick = () => stopRecognition(true);
 
         langBtns.forEach(btn => {
             btn.onclick = () => {
@@ -204,153 +212,125 @@ add_shortcode('voice_search_button', function() {
             };
         });
 
-        // =================================================================
-        // CÁC HÀM XỬ LÝ ÂM THANH PHÍA TRÌNH DUYỆT
-        // =================================================================
-
-        function bufferToWav(buffer, targetSampleRate) {
-            const numOfChan = buffer.numberOfChannels;
-            const a_length = buffer.length;
-            const resampled_length = Math.round(a_length * targetSampleRate / buffer.sampleRate);
-            const result = new Float32Array(resampled_length);
-            
-            const spring_factor = (a_length - 1) / (resampled_length - 1);
-            result[0] = buffer.getChannelData(0)[0];
-            for (let i = 1; i < resampled_length - 1; i++) {
-                const tmp = i * spring_factor;
-                const before = Math.floor(tmp);
-                const after = Math.ceil(tmp);
-                const atPoint = tmp - before;
-                result[i] = buffer.getChannelData(0)[before] + (buffer.getChannelData(0)[after] - buffer.getChannelData(0)[before]) * atPoint;
-            }
-            result[resampled_length-1] = buffer.getChannelData(0)[a_length-1];
-
-            const pcm_result = new Int16Array(resampled_length);
-            for (let i = 0; i < resampled_length; i++) {
-                let s = Math.max(-1, Math.min(1, result[i]));
-                pcm_result[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-
-            const wav_buffer = new ArrayBuffer(44 + pcm_result.length * 2);
-            const view = new DataView(wav_buffer);
-
-            writeString(view, 0, 'RIFF');
-            view.setUint32(4, 36 + pcm_result.length * 2, true);
-            writeString(view, 8, 'WAVE');
-            writeString(view, 12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true); // Mono
-            view.setUint32(24, targetSampleRate, true);
-            view.setUint32(28, targetSampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(view, 36, 'data');
-            view.setUint32(40, pcm_result.length * 2, true);
-
-            for (let i = 0; i < pcm_result.length; i++) {
-                view.setInt16(44 + i * 2, pcm_result[i], true);
-            }
-
-            return new Blob([view], { type: 'audio/wav' });
-        }
-
-        function writeString(view, offset, string) {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        }
-
-        const stopRecording = (forceClosePopup) => {
-            if (!recording && forceClosePopup) {
-                popup.classList.remove('active');
-                return;
-            }
-            if (!recording) return;
-
-            recorder.stop();
-            stream.getTracks().forEach(t => t.stop());
-            
-            recording = false;
-            recordBtn.classList.remove("recording");
-            
-            if (forceClosePopup) {
-                popup.classList.remove('active');
+        recordBtn.onclick = () => {
+            if (isListening) {
+                stopRecognition(false);
+            } else {
+                startRecognition();
             }
         };
-        
-        recordBtn.onclick = async () => {
-            if (recording) {
-                stopRecording(false);
-                return;
-            }
 
+        async function startRecognition() {
+            resultBox.innerHTML = "⏳ Đang kết nối...";
+            
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            } catch (err) {
-                resultBox.innerHTML = '<div style="color:red;">Không truy cập được micro.</div>';
-                return;
-            }
-            
-            recording = true;
-            recordBtn.classList.add("recording");
-            resultBox.innerHTML = "🎤 Đang lắng nghe...";
-            chunks = [];
+                const formData = new FormData();
+                formData.append('action', 'azure_get_token');
+                
+                const response = await fetch("<?php echo admin_url('admin-ajax.php'); ?>", {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
 
-            recorder = new MediaRecorder(stream);
-            recorder.ondataavailable = e => chunks.push(e.data);
-            
-            recorder.onstop = async () => {
-                if (chunks.length === 0 || chunks[0].size === 0) {
-                    resultBox.innerHTML = '<div style="color:orange;">Không có âm thanh được ghi lại.</div>';
+                if (!data.success) {
+                    resultBox.innerHTML = `<span style="color:red;">Lỗi: ${data.data}</span>`;
                     return;
                 }
 
-                resultBox.innerHTML = "⏳ Đang chuyển đổi âm thanh...";
+                const { token, region } = data.data;
 
-                const webmBlob = new Blob(chunks, { type: 'audio/webm' });
-                const tempAudioContext = new AudioContext();
-                const arrayBuffer = await webmBlob.arrayBuffer();
-                const audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
+                const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
+                speechConfig.speechRecognitionLanguage = selectedLang;
                 
-                const wavBlob = bufferToWav(audioBuffer, 16000);
-                tempAudioContext.close();
+                const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+                recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
 
-                const fd = new FormData();
-                fd.append("action", "voice_search");
-                fd.append("language", selectedLang);
-                fd.append("audio_data", wavBlob, "recording.wav");
+                // Hiển thị chữ tạm thời khi đang nói
+                recognizer.recognizing = (s, e) => {
+                    resultBox.innerHTML = `<span class="result-interim">${e.result.text}</span>`;
+                };
 
-                resultBox.innerHTML = "⏳ Đang xử lý...";
+                // XỬ LÝ KHI NGHE XONG CÂU HOÀN CHỈNH
+                recognizer.recognized = (s, e) => {
+                    if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                        const finalText = e.result.text.replace(/[.,?!]/g, ''); // Bỏ dấu câu
+                        
+                        // Tạo phần tử HTML cho kết quả
+                        resultBox.innerHTML = ''; // Xóa nội dung cũ
 
-                fetch("<?php echo admin_url('admin-ajax.php'); ?>", { method: "POST", body: fd })
-                .then(res => res.json())
-                .then(res => {
-                    if (res.success) {
-                        resultBox.innerHTML = `<div class="result-item" data-query="${res.data.query}">${res.data.query}</div>`;
-                        document.querySelectorAll('.result-item').forEach(item => {
-                            item.onclick = () => {
-                                const searchInput = document.querySelector('input[name="s"]');
-                                if(searchInput && searchInput.form){
-                                    searchInput.value = res.data.query;
-                                    searchInput.form.submit();
-                                } else {
-                                    window.location.href = res.data.redirect_url;
-                                }
-                            };
-                        });
-                    } else {
-                        resultBox.innerHTML = `<div style="color:red;">${res.data}</div>`;
+                        // 1. Tạo link bấm được
+                        const link = document.createElement('a');
+                        link.className = 'result-final-link';
+                        link.innerText = finalText;
+                        link.title = "Bấm để tìm kiếm ngay";
+                        link.onclick = (event) => {
+                            event.preventDefault();
+                            performSearch(finalText);
+                        };
+
+                     
+                        resultBox.appendChild(link);
+                   
+                        
+                        // Dừng mic để người dùng thao tác
+                        stopRecognition(false);
+                    } else if (e.result.reason === SpeechSDK.ResultReason.NoMatch) {
+                        resultBox.innerHTML = "❌ Không nghe rõ. Thử lại?";
+                        stopRecognition(false);
                     }
-                })
-                .catch(err => {
-                    resultBox.innerHTML = `<div style="color:red;">Lỗi kết nối. Vui lòng thử lại.</div>`;
-                });
-            };
+                };
 
-            recorder.start();
-            setTimeout(() => { if(recording) stopRecording(false); }, MAX_RECORD_TIME);
-        };
+                recognizer.canceled = (s, e) => {
+                    console.error(e);
+                    resultBox.innerHTML = "❌ Đã bị hủy hoặc lỗi.";
+                    stopRecognition(false);
+                };
+
+                recognizer.sessionStopped = (s, e) => {
+                    stopRecognition(false);
+                };
+
+                recognizer.startContinuousRecognitionAsync();
+                
+                isListening = true;
+                recordBtn.classList.add('listening');
+                resultBox.innerHTML = "🎤 Đang lắng nghe...";
+
+            } catch (err) {
+                console.error(err);
+                resultBox.innerHTML = "❌ Lỗi kết nối micro hoặc server.";
+            }
+        }
+
+        function stopRecognition(closePopup) {
+            if (recognizer) {
+                recognizer.stopContinuousRecognitionAsync(() => {
+                    recognizer.close();
+                    recognizer = undefined;
+                });
+            }
+            isListening = false;
+            recordBtn.classList.remove('listening');
+            
+            if (closePopup) {
+                popup.classList.remove('active');
+                resultBox.innerHTML = "Bấm micro để nói...";
+            }
+        }
+
+        function performSearch(query) {
+            // Hiển thị trạng thái đang chuyển trang
+            resultBox.innerHTML = "🚀 Đang tìm kiếm: " + query + "...";
+            
+            const searchInput = document.querySelector('input[name="s"]');
+            if(searchInput && searchInput.form){
+                searchInput.value = query;
+                searchInput.form.submit();
+            } else {
+                window.location.href = "<?php echo home_url('/?s='); ?>" + encodeURIComponent(query);
+            }
+        }
     });
     </script>
     <?php
@@ -358,55 +338,7 @@ add_shortcode('voice_search_button', function() {
 });
 
 // ===================================================================================
-// PHẦN 4: AJAX XỬ LÝ AUDIO & GỌI AZURE (ĐÃ BỎ FFmpeg)
-// ===================================================================================
-
-add_action('wp_ajax_voice_search', 'handle_voice_search');
-add_action('wp_ajax_nopriv_voice_search', 'handle_voice_search');
-
-function handle_voice_search() {
-    if (!isset($_FILES['audio_data'])) {
-        wp_send_json_error('Thiếu dữ liệu âm thanh.');
-        return;
-    }
-
-    $language = isset($_POST['language']) ? sanitize_text_field($_POST['language']) : 'vi-VN';
-
-    $upload = wp_handle_upload($_FILES['audio_data'], ['test_form' => false]);
-    if (!empty($upload['error'])) {
-        wp_send_json_error('Upload thất bại: ' . $upload['error']);
-        return;
-    }
-
-    $wav_file_path = $upload['file'];
-
-    // Gọi thẳng Azure vì file đã là định dạng WAV
-    $transcribed_text = trim(azure_transcribe_audio($wav_file_path, $language));
-
-    // Xóa file tạm sau khi xử lý
-    unlink($wav_file_path);
-
-    if (strpos($transcribed_text, '⚠️') === 0 || strpos($transcribed_text, '❌') === 0) {
-        wp_send_json_error($transcribed_text);
-        return;
-    }
-
-    if (empty($transcribed_text)) {
-        wp_send_json_error('Không nhận dạng được giọng nói.');
-        return;
-    }
-
-    $clean_text = preg_replace('/[[:punct:]]/u', '', $transcribed_text);
-    $clean_text = preg_replace('/\s+/u', ' ', $clean_text);
-    $sanitized_query = sanitize_text_field(trim($clean_text));
-
-    $search_url = home_url('/?s=' . urlencode($sanitized_query));
-
-    wp_send_json_success(['query' => $sanitized_query, 'redirect_url' => $search_url]);
-}
-
-// ===================================================================================
-// PHẦN 5: CHỈ TÌM KIẾM TRONG TIÊU ĐỀ
+// PHẦN 4: TÌM KIẾM CHỈ TRONG TIÊU ĐỀ (GIỮ NGUYÊN)
 // ===================================================================================
 
 function __custom_search_by_title_smart( $search, $wp_query ) {
