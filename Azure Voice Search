@@ -148,7 +148,7 @@ add_shortcode('voice_search_button', function() {
     </style>
 
     <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
-        <img src="https://img.icons8.com/?size=60&id=ZNyAxEX9vDxS&format=png&color=FFFFFF" alt="Voice Search">
+        <img src="https://tiengtrungquoc.net/wp-content/uploads/2025/12/microphone.png" alt="Voice Search">
     </button>
 
     <div id="voice-popup">
@@ -158,7 +158,7 @@ add_shortcode('voice_search_button', function() {
             <button class="lang-btn active" data-lang="vi-VN">
                 <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt">
                 <div class="lang-label">Tìm bài viết</div>
-                <div class="lang-note">Ví dụ:Từ vựng HSK 4, ngữ pháp HSK 4, bài tập HSK 4, bài giảng HSK4...</div>
+                <div class="lang-note">Ví dụ:ngữ pháp HSK 4...</div>
             </button>
             
             <button class="lang-btn" data-lang="zh-CN">
