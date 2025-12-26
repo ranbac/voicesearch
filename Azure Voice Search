@@ -1,7 +1,8 @@
+<?php
 /*
  * Plugin Name: Azure Voice Search (Real-time Streaming)
- * Description: V8.8: Bấm ra ngoài để đóng Popup. Không tự điền search. Tự động ghi âm/ngắt. Click văn bản để tìm.
- * Version: 8.8
+ * Description: V8.9: Bỏ toàn bộ dấu câu. Click outside to close. Auto Mic. Click to Search.
+ * Version: 8.9
  * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
@@ -43,7 +44,7 @@ add_action('admin_init', function() {
 });
 
 // ===================================================================================
-// PHẦN 2: SHORTCODE HIỂN THỊ & XỬ LÝ (CLICK OUTSIDE TO CLOSE)
+// PHẦN 2: SHORTCODE HIỂN THỊ & XỬ LÝ (REMOVE PUNCTUATION)
 // ===================================================================================
 
 add_shortcode('voice_search_button', function() {
@@ -62,13 +63,12 @@ add_shortcode('voice_search_button', function() {
         #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; }
         #voice-search-btn img { width: 28px; height: 28px; }
 
-        /* Thêm bóng đổ đậm hơn để tách biệt popup với nền */
         #voice-popup {
             display: none; position: fixed; 
             top: 50% !important; left: 50% !important;
             transform: translate(-50%, -50%) !important;
             background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.5); /* Bóng đổ đậm hơn */
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
             text-align: center; z-index: 9999; width: 340px;
             border: 1px solid #ccc;
         }
@@ -103,7 +103,7 @@ add_shortcode('voice_search_button', function() {
             font-size: 15px; 
             color: #222; 
             min-height: 40px; 
-            text-align: center; 
+            text-align: left; 
             background: #fff; 
             padding: 10px; 
             border-radius: 6px; 
@@ -191,15 +191,22 @@ add_shortcode('voice_search_button', function() {
         let fullText = "";
         let silenceTimer; 
 
+        // --- CẬP NHẬT: HÀM LÀM SẠCH VÀ BỎ DẤU CÂU ---
         function cleanGarbageText(text) {
             if (!text) return "";
-            let cleaned = text.replace(/(^|\s)(Phẩy|Phẫy|Chấm)(\s|[.,]|$)/gi, " ").trim();
-            cleaned = cleaned.replace(/[.,;]$/g, ""); 
-            return cleaned.trim();
+            
+            // 1. Xóa các từ ảo giác (Hallucination)
+            let cleaned = text.replace(/(^|\s)(Phẩy|Phẫy|Chấm|Hỏi chấm)(\s|[.,]|$)/gi, " ");
+            
+            // 2. Xóa toàn bộ ký tự dấu câu đặc biệt (Punctuation)
+            // Regex xóa: . , / # ! $ % ^ & * ; : { } = - _ ` ~ ( ) ?
+            cleaned = cleaned.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+            
+            // 3. Xóa khoảng trắng thừa
+            return cleaned.replace(/\s{2,}/g," ").trim();
         }
 
         voiceBtn.onclick = (e) => {
-            // Ngăn chặn sự kiện click lan ra document (để không bị đóng ngay lập tức)
             e.stopPropagation(); 
             popup.classList.add('active');
             if (!isRecording) {
@@ -207,18 +214,14 @@ add_shortcode('voice_search_button', function() {
             }
         };
 
-        // --- CẬP NHẬT: SỰ KIỆN BẤM RA NGOÀI ĐỂ ĐÓNG ---
         document.addEventListener('click', (event) => {
-            // Nếu popup đang mở
             if (popup.classList.contains('active')) {
-                // Nếu click KHÔNG nằm trong popup và KHÔNG nằm trong nút mở
                 if (!popup.contains(event.target) && !voiceBtn.contains(event.target)) {
                     stopRecording();
                 }
             }
         });
 
-        // Ngăn chặn sự kiện click bên trong popup lan ra ngoài (để không tự đóng chính nó)
         popup.onclick = (e) => {
             e.stopPropagation();
         };
@@ -251,8 +254,9 @@ add_shortcode('voice_search_button', function() {
             }
 
             const searchInput = document.querySelector('input[name="s"]');
-            let cleanText = fullText.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
-            cleanText = cleanText.replace(/\s{2,}/g," ").trim();
+            
+            // Làm sạch lần cuối cho chắc chắn
+            let cleanText = cleanGarbageText(fullText);
 
             if(searchInput && searchInput.form){
                 searchInput.value = cleanText; 
@@ -302,6 +306,7 @@ add_shortcode('voice_search_button', function() {
 
             recognizer.recognizing = (s, e) => {
                 let tempText = cleanGarbageText(e.result.text);
+                // Hiển thị text tạm thời (nếu có nội dung sau khi lọc dấu)
                 if(tempText) {
                     resultBox.innerHTML = `<span class="interim-text">${tempText}</span>`;
                 }
@@ -311,6 +316,7 @@ add_shortcode('voice_search_button', function() {
             recognizer.recognized = (s, e) => {
                 if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
                     
+                    // LỌC SẠCH DẤU CÂU NGAY TẠI ĐÂY
                     let validText = cleanGarbageText(e.result.text);
                     
                     if (validText.length > 0) {
@@ -372,7 +378,7 @@ add_shortcode('voice_search_button', function() {
 // PHẦN 3: TÌM KIẾM TRONG TIÊU ĐỀ
 // ===================================================================================
 
-function __custom_search_by_title_smart_v88( $search, $wp_query ) {
+function __custom_search_by_title_smart_v89( $search, $wp_query ) {
     global $wpdb;
     if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
         $search_term = $wp_query->query_vars['s'];
@@ -392,4 +398,4 @@ function __custom_search_by_title_smart_v88( $search, $wp_query ) {
     }
     return $search;
 }
-add_filter( 'posts_search', '__custom_search_by_title_smart_v88', 10, 2 );
+add_filter( 'posts_search', '__custom_search_by_title_smart_v89', 10, 2 );
