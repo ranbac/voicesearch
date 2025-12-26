@@ -1,13 +1,13 @@
 /*
- * Plugin Name: Azure Voice Search (Chinese Punctuation Fix)
- * Description: Tìm kiếm giọng nói. Đã lọc bỏ dấu câu tiếng Trung (。？！，).
- * Version: 8.5
+ * Plugin Name: Azure Voice Search (Real-time Streaming)
+ * Description: V8.8: Bấm ra ngoài để đóng Popup. Không tự điền search. Tự động ghi âm/ngắt. Click văn bản để tìm.
+ * Version: 8.8
  * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
 
 // ===================================================================================
-// PHẦN 1: CÀI ĐẶT & CẤU HÌNH AZURE
+// PHẦN 1: CÀI ĐẶT PLUGIN VÀ CẤU HÌNH AZURE
 // ===================================================================================
 
 add_action('admin_menu', function() {
@@ -43,352 +43,323 @@ add_action('admin_init', function() {
 });
 
 // ===================================================================================
-// PHẦN 2: API LẤY TOKEN (BACKEND)
+// PHẦN 2: SHORTCODE HIỂN THỊ & XỬ LÝ (CLICK OUTSIDE TO CLOSE)
 // ===================================================================================
 
-add_action('wp_ajax_azure_get_token', 'azure_get_token_callback');
-add_action('wp_ajax_nopriv_azure_get_token', 'azure_get_token_callback');
-
-function azure_get_token_callback() {
+add_shortcode('voice_search_button', function() {
     $speech_key = get_option('azure_speech_key');
     $speech_region = get_option('azure_speech_region');
 
     if (!$speech_key || !$speech_region) {
-        wp_send_json_error('Chưa cấu hình API Key/Region.');
+        return '<p style="color:red">Vui lòng cấu hình Azure Speech Key & Region trong cài đặt.</p>';
     }
 
-    $url = "https://{$speech_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken";
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-        'Ocp-Apim-Subscription-Key: ' . $speech_key,
-        'Content-Length: 0'
-    ));
-
-    $token = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($http_code != 200 || !$token) {
-        wp_send_json_error("Lỗi lấy Token từ Azure (HTTP $http_code)");
-    }
-
-    wp_send_json_success([
-        'token' => $token,
-        'region' => $speech_region
-    ]);
-}
-
-// ===================================================================================
-// PHẦN 3: SHORTCODE & GIAO DIỆN (FRONTEND)
-// ===================================================================================
-
-add_shortcode('voice_search_button', function() {
-    wp_enqueue_script('azure-speech-sdk', 'https://aka.ms/csspeech/jsbrowserpackageraw', [], null, true);
-    
     ob_start();
     ?>
+    <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@latest/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"></script>
+
     <style>
-        /* --- Nút kích hoạt --- */
         #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; }
         #voice-search-btn img { width: 28px; height: 28px; }
 
-        /* --- Overlay trong suốt --- */
-        #voice-overlay {
-            display: none; 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: transparent; 
-            z-index: 99998; 
-        }
-        #voice-overlay.active { display: block; }
-
-        /* --- Popup chính --- */
+        /* Thêm bóng đổ đậm hơn để tách biệt popup với nền */
         #voice-popup {
             display: none; position: fixed; 
             top: 50% !important; left: 50% !important;
             transform: translate(-50%, -50%) !important;
-            background: #fff !important; padding: 30px 20px 20px 20px; 
-            border-radius: 12px;
-            border: 1px solid #e0e0e0; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15); 
-            text-align: center; 
-            z-index: 99999;
-            width: 340px;
-            max-width: 90%;
+            background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5); /* Bóng đổ đậm hơn */
+            text-align: center; z-index: 9999; width: 340px;
+            border: 1px solid #ccc;
         }
         #voice-popup.active { display: block; }
-        #voice-popup h3 { margin-top: 0; font-size: 18px; margin-bottom: 15px; color: #333; }
+        #voice-popup h3 { margin-top: 0; font-size: 18px; }
 
-        /* --- Nút X Đóng --- */
-        #close-popup-x {
-            position: absolute; top: 8px; right: 12px;
-            background: none; border: none; font-size: 24px;
-            color: #aaa; cursor: pointer; line-height: 1; padding: 0;
-        }
-        #close-popup-x:hover { color: #d63638; }
-
-        /* --- CSS NÚT CỜ --- */
         .lang-container { display: flex; justify-content: center; gap: 14px; margin-bottom: 12px; }
-        .lang-btn { border: none; background: none; cursor: pointer; text-align: center; padding: 5px; }
+        .lang-btn { border: none; background: none; cursor: pointer; text-align: center; }
+        .lang-btn img { width: 48px; height: 32px; border: 2px solid transparent; border-radius: 6px; transition: 0.2s; }
+        .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
+        .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
+        .lang-note { font-size: 10px; color: #555; margin-top: 2px; font-style: italic; line-height: 1.2; min-height: 12px; }
+
+        #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; }
+        #record-btn img { width: 28px; height: 28px;}
+
+        #record-btn.recording img {
+            filter: invert(29%) sepia(93%) saturate(7486%) hue-rotate(356deg) brightness(97%) contrast(116%);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.6; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
+
+        /* CSS CHO Ô KẾT QUẢ */
+        #result-box { 
+            margin-top: 15px; 
+            font-size: 15px; 
+            color: #222; 
+            min-height: 40px; 
+            text-align: center; 
+            background: #fff; 
+            padding: 10px; 
+            border-radius: 6px; 
+            border: 1px solid #ddd; 
+            max-height: 150px; 
+            overflow-y: auto; 
+            cursor: default;
+            position: relative;
+            transition: all 0.2s;
+        }
+
+        #result-box.clickable {
+            cursor: pointer;
+            border-color: #28a745;
+            background-color: #f9fff9;
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.15);
+        }
+        #result-box.clickable:hover {
+            background-color: #eafbea;
+        }
         
-        /* Mặc định: Xám và mờ */
-        .lang-btn img { 
-            width: 48px; height: 32px; 
-            border-radius: 4px; 
-            transition: all 0.3s ease; 
-            filter: grayscale(100%);   
-            opacity: 0.5;              
+        #result-box.clickable::after {
+            content: "👆 Nhấn vào đây để tìm kiếm";
+            display: block;
+            width: 100%;
+            text-align: center;
+            font-size: 11px;
+            color: #28a745;
+            margin-top: 8px;
+            font-weight: 500;
+            border-top: 1px dashed #c3e6cb;
+            padding-top: 4px;
         }
-
-        /* Đang chọn: Nguyên bản */
-        .lang-btn.active img { 
-            filter: none;       
-            opacity: 1;         
-            transform: none;    
-            box-shadow: 0 4px 10px rgba(0,0,0,0.15); 
-        }
-
-        /* Hover */
-        .lang-btn:hover img {
-            filter: grayscale(0%);
-            opacity: 0.9;
-        }
-
-        .lang-label { font-size: 12px; margin-top: 4px; color: #333; font-weight: 600; }
-        .lang-note { font-size: 10px; color: #666; margin-top: 2px; font-style: italic; }
-
-
-        /* --- Nút Record --- */
-        #record-btn { margin-top: 15px; padding: 12px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; transition: all 0.3s; }
-        #record-btn img { width: 32px; height: 32px; vertical-align: middle; }
         
-        #record-btn.listening {
-            background: #d63638;
-            box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7);
-            animation: pulse-red 1.5s infinite;
-        }
-        @keyframes pulse-red {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(214, 54, 56, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0); }
-        }
-
-        /* --- Kết quả --- */
-        #result-box { margin-top: 20px; font-size: 16px; color: #222; min-height: 24px; font-weight: 500; }
-        
-        .result-final-link { 
-            color: #0073aa; font-weight: bold; font-size: 18px;
-            text-decoration: none; cursor: pointer; padding: 8px 15px;
-            display: inline-block; transition: 0.2s;
-            border: 1px dashed #0073aa; border-radius: 20px;
-            background: rgba(0, 115, 170, 0.08);
-        }
-        .result-final-link:hover { background: #0073aa; color: #fff; }
-        .result-interim { color: #999; font-style: italic; }
+        .final-text { color: #000; font-weight: bold; }
+        .interim-text { color: #888; font-style: italic; }
     </style>
 
-    <button id="voice-search-btn" type="button" title="Tìm kiếm bằng giọng nói">
+    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
         <img src="https://tiengtrungquoc.net/wp-content/uploads/2025/12/microphone.png" alt="Voice Search">
     </button>
 
-    <div id="voice-overlay"></div>
-
     <div id="voice-popup">
-        <button id="close-popup-x" type="button" title="Đóng">&times;</button>
-
         <h3>Chọn ngôn ngữ</h3>
-        
         <div class="lang-container">
             <button class="lang-btn active" data-lang="vi-VN">
                 <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt">
-                <div class="lang-label">Tìm bài viết, tra từ, dịch câu</div>
-                <div class="lang-note">"Ngữ pháp HSK 4..."</div>
+                <div class="lang-label">Tìm bài viết</div>
+                <div class="lang-note">Ví dụ: ngữ pháp HSK 4...</div>
             </button>
             <button class="lang-btn" data-lang="zh-CN">
                 <img src="https://flagcdn.com/cn.svg" alt="中文">
-                <div class="lang-label">Tra từ, dịch câu</div>
-                <div class="lang-note">"你好..."</div>
+                <div class="lang-label">Tra từ</div>
+                <div class="lang-note">&nbsp;</div>
             </button>
         </div>
-
-        <button id="record-btn" type="button" title="Bấm để nói ngay">
+        
+        <button id="record-btn" title="Ghi âm">
             <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
         </button>
-
-        <div id="result-box">Bấm micro ở trên để nói...</div>
+        
+        <div id="result-box"><span style="color:#aaa;">Đang lắng nghe...</span></div>
+        
+        <button id="close-popup">Đóng</button>
     </div>
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
+        const speechKey = "<?php echo esc_js($speech_key); ?>";
+        const serviceRegion = "<?php echo esc_js($speech_region); ?>";
+
         const popup = document.getElementById('voice-popup');
-        const overlay = document.getElementById('voice-overlay');
         const voiceBtn = document.getElementById('voice-search-btn');
         const recordBtn = document.getElementById('record-btn');
         const langBtns = document.querySelectorAll('.lang-btn');
-        const closeBtnX = document.getElementById('close-popup-x'); 
+        const closeBtn = document.getElementById('close-popup');
         const resultBox = document.getElementById('result-box');
+        const voicePopup = document.getElementById('voice-popup');
+
+        if (voicePopup) document.body.appendChild(voicePopup);
 
         let selectedLang = "vi-VN";
         let recognizer;
-        let isListening = false;
-        let cachedTokenObj = null; 
+        let isRecording = false;
+        let fullText = "";
+        let silenceTimer; 
 
-        if (document.getElementById('voice-popup')) {
-            document.body.appendChild(overlay);
-            document.body.appendChild(popup);
+        function cleanGarbageText(text) {
+            if (!text) return "";
+            let cleaned = text.replace(/(^|\s)(Phẩy|Phẫy|Chấm)(\s|[.,]|$)/gi, " ").trim();
+            cleaned = cleaned.replace(/[.,;]$/g, ""); 
+            return cleaned.trim();
         }
 
-        // --- SỰ KIỆN: MỞ POPUP ---
-        voiceBtn.onclick = () => {
+        voiceBtn.onclick = (e) => {
+            // Ngăn chặn sự kiện click lan ra document (để không bị đóng ngay lập tức)
+            e.stopPropagation(); 
             popup.classList.add('active');
-            overlay.classList.add('active'); 
-            prepareTokenInBackground(); 
+            if (!isRecording) {
+                startRecording();
+            }
         };
 
-        // --- SỰ KIỆN: ĐÓNG POPUP ---
-        const closeAll = () => stopRecognition(true);
-        
-        closeBtnX.onclick = closeAll; 
-        overlay.onclick = closeAll;   
+        // --- CẬP NHẬT: SỰ KIỆN BẤM RA NGOÀI ĐỂ ĐÓNG ---
+        document.addEventListener('click', (event) => {
+            // Nếu popup đang mở
+            if (popup.classList.contains('active')) {
+                // Nếu click KHÔNG nằm trong popup và KHÔNG nằm trong nút mở
+                if (!popup.contains(event.target) && !voiceBtn.contains(event.target)) {
+                    stopRecording();
+                }
+            }
+        });
+
+        // Ngăn chặn sự kiện click bên trong popup lan ra ngoài (để không tự đóng chính nó)
+        popup.onclick = (e) => {
+            e.stopPropagation();
+        };
+
+        closeBtn.onclick = () => stopRecording(); 
 
         langBtns.forEach(btn => {
             btn.onclick = () => {
+                if(isRecording) return;
                 langBtns.forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 selectedLang = btn.dataset.lang;
             };
         });
 
-        async function prepareTokenInBackground() {
-            if (cachedTokenObj && (Date.now() - cachedTokenObj.time < 540000)) {
-                return; 
-            }
-            try {
-                const formData = new FormData();
-                formData.append('action', 'azure_get_token');
-                
-                const response = await fetch("<?php echo admin_url('admin-ajax.php'); ?>", {
-                    method: 'POST', body: formData
-                });
-                const data = await response.json();
-
-                if (data.success) {
-                    cachedTokenObj = {
-                        token: data.data.token,
-                        region: data.data.region,
-                        time: Date.now()
-                    };
-                    console.log("Azure Token đã sẵn sàng!");
-                }
-            } catch (e) {
-                console.error("Lỗi lấy token ngầm:", e);
-            }
-        }
-
         recordBtn.onclick = () => {
-            if (isListening) {
-                stopRecognition(false);
+            if (isRecording) {
+                stopRecording();
             } else {
-                startRecognition();
+                startRecording();
             }
         };
 
-        async function startRecognition() {
-            if (!cachedTokenObj) {
-                resultBox.innerHTML = "⏳ Đang kết nối server...";
-                await prepareTokenInBackground();
+        function triggerSearch() {
+            if (!fullText.trim()) return;
+
+            if (isRecording && recognizer) {
+                recognizer.stopContinuousRecognitionAsync();
+                isRecording = false;
             }
 
-            if (!cachedTokenObj) {
-                resultBox.innerHTML = "❌ Lỗi kết nối. Vui lòng thử lại.";
-                return;
-            }
-
-            try {
-                const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(cachedTokenObj.token, cachedTokenObj.region);
-                speechConfig.speechRecognitionLanguage = selectedLang;
-                
-                const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
-                recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-
-                recognizer.recognizing = (s, e) => {
-                    resultBox.innerHTML = `<span class="result-interim">${e.result.text}</span>`;
-                };
-
-                // --- XỬ LÝ KẾT QUẢ ---
-                recognizer.recognized = (s, e) => {
-                    if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-                        // CẬP NHẬT: REGEX BỎ DẤU CÂU CẢ TIẾNG VIỆT VÀ TRUNG
-                        // .,?! : Tiếng Việt/Anh
-                        // 。，？！、: Tiếng Trung
-                        const finalText = e.result.text.replace(/[.,?!:;。，？！、]/g, '');
-                        
-                        resultBox.innerHTML = '';
-                        const link = document.createElement('a');
-                        link.className = 'result-final-link';
-                        link.innerText = finalText;
-                        link.title = "Bấm để tìm kiếm ngay: " + finalText;
-                        link.onclick = (event) => {
-                            event.preventDefault();
-                            performSearch(finalText);
-                        };
-                        resultBox.appendChild(link);
-                        
-                        stopRecognition(false);
-                    } else if (e.result.reason === SpeechSDK.ResultReason.NoMatch) {
-                        resultBox.innerHTML = "❌ Không nghe rõ. Thử lại nhé!";
-                        stopRecognition(false);
-                    }
-                };
-
-                recognizer.canceled = (s, e) => {
-                    resultBox.innerHTML = "❌ Đã dừng.";
-                    stopRecognition(false);
-                };
-
-                recognizer.sessionStopped = (s, e) => {
-                    stopRecognition(false);
-                };
-
-                recognizer.startContinuousRecognitionAsync();
-                
-                isListening = true;
-                recordBtn.classList.add('listening');
-                resultBox.innerHTML = "🎤 Đang lắng nghe...";
-
-            } catch (err) {
-                console.error(err);
-                resultBox.innerHTML = "❌ Không tìm thấy Micro.";
-            }
-        }
-
-        function stopRecognition(closePopup) {
-            if (recognizer) {
-                recognizer.stopContinuousRecognitionAsync(() => {
-                    recognizer.close();
-                    recognizer = undefined;
-                });
-            }
-            isListening = false;
-            recordBtn.classList.remove('listening');
-            
-            if (closePopup) {
-                popup.classList.remove('active');
-                overlay.classList.remove('active');
-                resultBox.innerHTML = "Bấm micro ở trên để nói...";
-            }
-        }
-
-        function performSearch(query) {
-            resultBox.innerHTML = "🚀 Đang tìm kiếm: " + query + "...";
             const searchInput = document.querySelector('input[name="s"]');
+            let cleanText = fullText.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"");
+            cleanText = cleanText.replace(/\s{2,}/g," ").trim();
+
             if(searchInput && searchInput.form){
-                searchInput.value = query;
+                searchInput.value = cleanText; 
                 searchInput.form.submit();
             } else {
-                window.location.href = "<?php echo home_url('/?s='); ?>" + encodeURIComponent(query);
+                window.location.href = "<?php echo home_url('/?s='); ?>" + encodeURIComponent(cleanText);
+            }
+            popup.classList.remove('active');
+        }
+
+        resultBox.onclick = () => {
+            if (fullText.trim().length > 0) {
+                triggerSearch();
+            }
+        };
+        
+        function resetUI() {
+            resultBox.innerHTML = '<span style="color:#aaa;">Đang lắng nghe...</span>';
+            resultBox.classList.remove('clickable');
+            fullText = "";
+        }
+
+        function resetSilenceTimer() {
+            if (silenceTimer) clearTimeout(silenceTimer);
+            silenceTimer = setTimeout(() => {
+                if (isRecording) {
+                    stopRecording();
+                    let checkText = cleanGarbageText(fullText);
+                    if (checkText.length === 0) {
+                         resultBox.innerHTML = '<span style="color:#aaa;">(Không nghe thấy gì...)</span>';
+                         resultBox.classList.remove('clickable');
+                    }
+                }
+            }, 3000); 
+        }
+
+        function startRecording() {
+            resetUI();
+            
+            const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(speechKey, serviceRegion);
+            speechConfig.speechRecognitionLanguage = selectedLang;
+            
+            const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+            resetSilenceTimer();
+
+            recognizer.recognizing = (s, e) => {
+                let tempText = cleanGarbageText(e.result.text);
+                if(tempText) {
+                    resultBox.innerHTML = `<span class="interim-text">${tempText}</span>`;
+                }
+                resetSilenceTimer(); 
+            };
+
+            recognizer.recognized = (s, e) => {
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                    
+                    let validText = cleanGarbageText(e.result.text);
+                    
+                    if (validText.length > 0) {
+                        fullText = validText; 
+                        resultBox.innerHTML = `<span class="final-text">${fullText}</span>`;
+                        resultBox.classList.add('clickable');
+                    }
+
+                    resetSilenceTimer(); 
+
+                } else if (e.result.reason === SpeechSDK.ResultReason.NoMatch) {
+                    console.log("NOMATCH");
+                }
+            };
+
+            recognizer.canceled = (s, e) => {
+                stopRecording();
+                resultBox.innerHTML += `<div style="color:red; font-size:12px;">Đã ngắt kết nối.</div>`;
+            };
+
+            recognizer.sessionStopped = (s, e) => {
+                stopRecording();
+            };
+
+            recognizer.startContinuousRecognitionAsync(() => {
+                isRecording = true;
+                recordBtn.classList.add("recording");
+            }, (err) => {
+                resultBox.innerHTML = "Lỗi: " + err;
+                isRecording = false;
+            });
+        }
+
+        function stopRecording() {
+            if (silenceTimer) clearTimeout(silenceTimer);
+
+            if (!isRecording) {
+                popup.classList.remove('active');
+                return;
+            }
+            if (recognizer) {
+                recognizer.stopContinuousRecognitionAsync(() => {
+                    isRecording = false;
+                    recordBtn.classList.remove("recording");
+                    
+                    if(cleanGarbageText(fullText).length > 0) {
+                        resultBox.classList.add('clickable');
+                    }
+                });
             }
         }
     });
@@ -398,25 +369,22 @@ add_shortcode('voice_search_button', function() {
 });
 
 // ===================================================================================
-// PHẦN 4: BỘ LỌC TÌM KIẾM
+// PHẦN 3: TÌM KIẾM TRONG TIÊU ĐỀ
 // ===================================================================================
 
-function __custom_search_by_title_only( $search, $wp_query ) {
+function __custom_search_by_title_smart_v88( $search, $wp_query ) {
     global $wpdb;
     if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
         $search_term = $wp_query->query_vars['s'];
         if ( empty( $search_term ) ) return $search;
-
         $search_terms = explode( ' ', $search_term );
         $search_conditions = [];
-
         foreach ( $search_terms as $term ) {
             $term = trim( $term );
             if ( !empty($term) ) {
                 $search_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", '%' . $wpdb->esc_like( $term ) . '%');
             }
         }
-
         if ( !empty($search_conditions) ) {
             $search = " AND ( " . implode( ' AND ', $search_conditions ) . " )";
             $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
@@ -424,4 +392,4 @@ function __custom_search_by_title_only( $search, $wp_query ) {
     }
     return $search;
 }
-add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
+add_filter( 'posts_search', '__custom_search_by_title_smart_v88', 10, 2 );
