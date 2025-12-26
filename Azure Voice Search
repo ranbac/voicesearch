@@ -1,13 +1,13 @@
 /*
- * Plugin Name: Azure Voice Search (Streaming SDK)
- * Description: Tìm kiếm giọng nói thời gian thực (Real-time Streaming) sử dụng Azure Speech SDK JS.
- * Version: 7.1
+ * Plugin Name: Azure Voice Search (Chinese Punctuation Fix)
+ * Description: Tìm kiếm giọng nói. Đã lọc bỏ dấu câu tiếng Trung (。？！，).
+ * Version: 8.5
  * Author: Strong Anchor Tech (Updated by Gemini)
  * Author URI: https://stronganchortech.com
  */
 
 // ===================================================================================
-// PHẦN 1: CÀI ĐẶT & CẤU HÌNH (GIỮ NGUYÊN)
+// PHẦN 1: CÀI ĐẶT & CẤU HÌNH AZURE
 // ===================================================================================
 
 add_action('admin_menu', function() {
@@ -43,8 +43,7 @@ add_action('admin_init', function() {
 });
 
 // ===================================================================================
-// PHẦN 2: API LẤY TOKEN (MỚI)
-// Thay vì gửi audio, ta gửi yêu cầu lấy Token để JS kết nối trực tiếp
+// PHẦN 2: API LẤY TOKEN (BACKEND)
 // ===================================================================================
 
 add_action('wp_ajax_azure_get_token', 'azure_get_token_callback');
@@ -83,41 +82,88 @@ function azure_get_token_callback() {
 }
 
 // ===================================================================================
-// PHẦN 3: SHORTCODE & UI (CẬP NHẬT: CLICK VÀO CHỮ MỚI TÌM)
+// PHẦN 3: SHORTCODE & GIAO DIỆN (FRONTEND)
 // ===================================================================================
 
 add_shortcode('voice_search_button', function() {
-    // Load Azure Speech SDK từ CDN của Microsoft
     wp_enqueue_script('azure-speech-sdk', 'https://aka.ms/csspeech/jsbrowserpackageraw', [], null, true);
     
     ob_start();
     ?>
     <style>
+        /* --- Nút kích hoạt --- */
         #voice-search-btn { background: none; border: none; cursor: pointer; padding: 5px; }
         #voice-search-btn img { width: 28px; height: 28px; }
 
+        /* --- Overlay trong suốt --- */
+        #voice-overlay {
+            display: none; 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: transparent; 
+            z-index: 99998; 
+        }
+        #voice-overlay.active { display: block; }
+
+        /* --- Popup chính --- */
         #voice-popup {
             display: none; position: fixed; 
             top: 50% !important; left: 50% !important;
             transform: translate(-50%, -50%) !important;
-            background: #f0f0f0 !important; padding: 20px; border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-            text-align: center; z-index: 9999; width: 340px;
+            background: #fff !important; padding: 30px 20px 20px 20px; 
+            border-radius: 12px;
+            border: 1px solid #e0e0e0; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15); 
+            text-align: center; 
+            z-index: 99999;
+            width: 340px;
+            max-width: 90%;
         }
         #voice-popup.active { display: block; }
-        #voice-popup h3 { margin-top: 0; font-size: 18px; }
+        #voice-popup h3 { margin-top: 0; font-size: 18px; margin-bottom: 15px; color: #333; }
 
+        /* --- Nút X Đóng --- */
+        #close-popup-x {
+            position: absolute; top: 8px; right: 12px;
+            background: none; border: none; font-size: 24px;
+            color: #aaa; cursor: pointer; line-height: 1; padding: 0;
+        }
+        #close-popup-x:hover { color: #d63638; }
+
+        /* --- CSS NÚT CỜ --- */
         .lang-container { display: flex; justify-content: center; gap: 14px; margin-bottom: 12px; }
-        .lang-btn { border: none; background: none; cursor: pointer; text-align: center; }
-        .lang-btn img { width: 48px; height: 32px; border: 2px solid transparent; border-radius: 6px; transition: 0.2s; }
-        .lang-btn.active img { border-color: #0073aa; box-shadow: 0 0 6px rgba(0,115,170,0.6); }
-        .lang-label { font-size: 12px; margin-top: 4px; color: #333; }
-        .lang-note { font-size: 10px; color: #555; margin-top: 2px; font-style: italic; line-height: 1.2; min-height: 12px; }
+        .lang-btn { border: none; background: none; cursor: pointer; text-align: center; padding: 5px; }
+        
+        /* Mặc định: Xám và mờ */
+        .lang-btn img { 
+            width: 48px; height: 32px; 
+            border-radius: 4px; 
+            transition: all 0.3s ease; 
+            filter: grayscale(100%);   
+            opacity: 0.5;              
+        }
 
-        #record-btn { margin-top: 12px; padding: 10px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; transition: all 0.3s; }
-        #record-btn img { width: 28px; height: 28px;}
+        /* Đang chọn: Nguyên bản */
+        .lang-btn.active img { 
+            filter: none;       
+            opacity: 1;         
+            transform: none;    
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15); 
+        }
 
-        /* Hiệu ứng Pulse khi đang nghe */
+        /* Hover */
+        .lang-btn:hover img {
+            filter: grayscale(0%);
+            opacity: 0.9;
+        }
+
+        .lang-label { font-size: 12px; margin-top: 4px; color: #333; font-weight: 600; }
+        .lang-note { font-size: 10px; color: #666; margin-top: 2px; font-style: italic; }
+
+
+        /* --- Nút Record --- */
+        #record-btn { margin-top: 15px; padding: 12px; border: none; border-radius: 50%; background: #0073aa; cursor: pointer; transition: all 0.3s; }
+        #record-btn img { width: 32px; height: 32px; vertical-align: middle; }
+        
         #record-btn.listening {
             background: #d63638;
             box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7);
@@ -125,84 +171,87 @@ add_shortcode('voice_search_button', function() {
         }
         @keyframes pulse-red {
             0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(214, 54, 56, 0); }
+            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(214, 54, 56, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(214, 54, 56, 0); }
         }
 
-        #close-popup { margin-top: 10px; background: none; border: none; color: #888; cursor: pointer; }
-
-        #result-box { margin-top: 15px; font-size: 16px; color: #222; min-height: 24px; font-weight: 500; }
+        /* --- Kết quả --- */
+        #result-box { margin-top: 20px; font-size: 16px; color: #222; min-height: 24px; font-weight: 500; }
         
-        /* Style cho kết quả click được */
         .result-final-link { 
-            color: #0073aa; 
-            font-weight: bold; 
-            font-size: 20px;
-            text-decoration: none; 
-            cursor: pointer; 
-            padding: 5px 10px;
-            display: inline-block;
-            transition: 0.2s;
-            border: 1px dashed #0073aa;
-            border-radius: 5px;
-            background: rgba(0, 115, 170, 0.05);
+            color: #0073aa; font-weight: bold; font-size: 18px;
+            text-decoration: none; cursor: pointer; padding: 8px 15px;
+            display: inline-block; transition: 0.2s;
+            border: 1px dashed #0073aa; border-radius: 20px;
+            background: rgba(0, 115, 170, 0.08);
         }
-        .result-final-link:hover {
-            background: #0073aa;
-            color: #fff;
-        }
-
-        .result-interim { color: #888; }
-        .click-guide { font-size: 11px; color: #d63638; margin-top: 5px; font-style: italic; animation: fadeIn 1s; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .result-final-link:hover { background: #0073aa; color: #fff; }
+        .result-interim { color: #999; font-style: italic; }
     </style>
 
-    <button id="voice-search-btn" title="Tìm kiếm bằng giọng nói">
+    <button id="voice-search-btn" type="button" title="Tìm kiếm bằng giọng nói">
         <img src="https://tiengtrungquoc.net/wp-content/uploads/2025/12/microphone.png" alt="Voice Search">
     </button>
 
+    <div id="voice-overlay"></div>
+
     <div id="voice-popup">
+        <button id="close-popup-x" type="button" title="Đóng">&times;</button>
+
         <h3>Chọn ngôn ngữ</h3>
+        
         <div class="lang-container">
             <button class="lang-btn active" data-lang="vi-VN">
                 <img src="https://flagcdn.com/vn.svg" alt="Tiếng Việt">
-                <div class="lang-label">Tìm bài viết</div>
-                <div class="lang-note">Ví dụ: ngữ pháp HSK 4...</div>
+                <div class="lang-label">Tìm bài viết, tra từ, dịch câu</div>
+                <div class="lang-note">"Ngữ pháp HSK 4..."</div>
             </button>
             <button class="lang-btn" data-lang="zh-CN">
                 <img src="https://flagcdn.com/cn.svg" alt="中文">
-                <div class="lang-label">Tra từ</div>
-                <div class="lang-note">&nbsp;</div>
+                <div class="lang-label">Tra từ, dịch câu</div>
+                <div class="lang-note">"你好..."</div>
             </button>
         </div>
 
-        <button id="record-btn" title="Bắt đầu nói">
+        <button id="record-btn" type="button" title="Bấm để nói ngay">
             <img src="https://img.icons8.com/ios-glyphs/60/ffffff/microphone.png" alt="Record">
         </button>
 
-        <div id="result-box">Bấm micro để nói...</div>
-        <button id="close-popup">Đóng</button>
+        <div id="result-box">Bấm micro ở trên để nói...</div>
     </div>
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
         const popup = document.getElementById('voice-popup');
+        const overlay = document.getElementById('voice-overlay');
         const voiceBtn = document.getElementById('voice-search-btn');
         const recordBtn = document.getElementById('record-btn');
         const langBtns = document.querySelectorAll('.lang-btn');
-        const closeBtn = document.getElementById('close-popup');
+        const closeBtnX = document.getElementById('close-popup-x'); 
         const resultBox = document.getElementById('result-box');
 
         let selectedLang = "vi-VN";
         let recognizer;
         let isListening = false;
+        let cachedTokenObj = null; 
 
         if (document.getElementById('voice-popup')) {
-            document.body.appendChild(document.getElementById('voice-popup'));
+            document.body.appendChild(overlay);
+            document.body.appendChild(popup);
         }
 
-        voiceBtn.onclick = () => popup.classList.add('active');
-        closeBtn.onclick = () => stopRecognition(true);
+        // --- SỰ KIỆN: MỞ POPUP ---
+        voiceBtn.onclick = () => {
+            popup.classList.add('active');
+            overlay.classList.add('active'); 
+            prepareTokenInBackground(); 
+        };
+
+        // --- SỰ KIỆN: ĐÓNG POPUP ---
+        const closeAll = () => stopRecognition(true);
+        
+        closeBtnX.onclick = closeAll; 
+        overlay.onclick = closeAll;   
 
         langBtns.forEach(btn => {
             btn.onclick = () => {
@@ -211,6 +260,32 @@ add_shortcode('voice_search_button', function() {
                 selectedLang = btn.dataset.lang;
             };
         });
+
+        async function prepareTokenInBackground() {
+            if (cachedTokenObj && (Date.now() - cachedTokenObj.time < 540000)) {
+                return; 
+            }
+            try {
+                const formData = new FormData();
+                formData.append('action', 'azure_get_token');
+                
+                const response = await fetch("<?php echo admin_url('admin-ajax.php'); ?>", {
+                    method: 'POST', body: formData
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    cachedTokenObj = {
+                        token: data.data.token,
+                        region: data.data.region,
+                        time: Date.now()
+                    };
+                    console.log("Azure Token đã sẵn sàng!");
+                }
+            } catch (e) {
+                console.error("Lỗi lấy token ngầm:", e);
+            }
+        }
 
         recordBtn.onclick = () => {
             if (isListening) {
@@ -221,69 +296,55 @@ add_shortcode('voice_search_button', function() {
         };
 
         async function startRecognition() {
-            resultBox.innerHTML = "⏳ Đang kết nối...";
-            
+            if (!cachedTokenObj) {
+                resultBox.innerHTML = "⏳ Đang kết nối server...";
+                await prepareTokenInBackground();
+            }
+
+            if (!cachedTokenObj) {
+                resultBox.innerHTML = "❌ Lỗi kết nối. Vui lòng thử lại.";
+                return;
+            }
+
             try {
-                const formData = new FormData();
-                formData.append('action', 'azure_get_token');
-                
-                const response = await fetch("<?php echo admin_url('admin-ajax.php'); ?>", {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-
-                if (!data.success) {
-                    resultBox.innerHTML = `<span style="color:red;">Lỗi: ${data.data}</span>`;
-                    return;
-                }
-
-                const { token, region } = data.data;
-
-                const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
+                const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(cachedTokenObj.token, cachedTokenObj.region);
                 speechConfig.speechRecognitionLanguage = selectedLang;
                 
                 const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
                 recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
 
-                // Hiển thị chữ tạm thời khi đang nói
                 recognizer.recognizing = (s, e) => {
                     resultBox.innerHTML = `<span class="result-interim">${e.result.text}</span>`;
                 };
 
-                // XỬ LÝ KHI NGHE XONG CÂU HOÀN CHỈNH
+                // --- XỬ LÝ KẾT QUẢ ---
                 recognizer.recognized = (s, e) => {
                     if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-                        const finalText = e.result.text.replace(/[.,?!]/g, ''); // Bỏ dấu câu
+                        // CẬP NHẬT: REGEX BỎ DẤU CÂU CẢ TIẾNG VIỆT VÀ TRUNG
+                        // .,?! : Tiếng Việt/Anh
+                        // 。，？！、: Tiếng Trung
+                        const finalText = e.result.text.replace(/[.,?!:;。，？！、]/g, '');
                         
-                        // Tạo phần tử HTML cho kết quả
-                        resultBox.innerHTML = ''; // Xóa nội dung cũ
-
-                        // 1. Tạo link bấm được
+                        resultBox.innerHTML = '';
                         const link = document.createElement('a');
                         link.className = 'result-final-link';
                         link.innerText = finalText;
-                        link.title = "Bấm để tìm kiếm ngay";
+                        link.title = "Bấm để tìm kiếm ngay: " + finalText;
                         link.onclick = (event) => {
                             event.preventDefault();
                             performSearch(finalText);
                         };
-
-                     
                         resultBox.appendChild(link);
-                   
                         
-                        // Dừng mic để người dùng thao tác
                         stopRecognition(false);
                     } else if (e.result.reason === SpeechSDK.ResultReason.NoMatch) {
-                        resultBox.innerHTML = "❌ Không nghe rõ. Thử lại?";
+                        resultBox.innerHTML = "❌ Không nghe rõ. Thử lại nhé!";
                         stopRecognition(false);
                     }
                 };
 
                 recognizer.canceled = (s, e) => {
-                    console.error(e);
-                    resultBox.innerHTML = "❌ Đã bị hủy hoặc lỗi.";
+                    resultBox.innerHTML = "❌ Đã dừng.";
                     stopRecognition(false);
                 };
 
@@ -299,7 +360,7 @@ add_shortcode('voice_search_button', function() {
 
             } catch (err) {
                 console.error(err);
-                resultBox.innerHTML = "❌ Lỗi kết nối micro hoặc server.";
+                resultBox.innerHTML = "❌ Không tìm thấy Micro.";
             }
         }
 
@@ -315,14 +376,13 @@ add_shortcode('voice_search_button', function() {
             
             if (closePopup) {
                 popup.classList.remove('active');
-                resultBox.innerHTML = "Bấm micro để nói...";
+                overlay.classList.remove('active');
+                resultBox.innerHTML = "Bấm micro ở trên để nói...";
             }
         }
 
         function performSearch(query) {
-            // Hiển thị trạng thái đang chuyển trang
             resultBox.innerHTML = "🚀 Đang tìm kiếm: " + query + "...";
-            
             const searchInput = document.querySelector('input[name="s"]');
             if(searchInput && searchInput.form){
                 searchInput.value = query;
@@ -338,22 +398,25 @@ add_shortcode('voice_search_button', function() {
 });
 
 // ===================================================================================
-// PHẦN 4: TÌM KIẾM CHỈ TRONG TIÊU ĐỀ (GIỮ NGUYÊN)
+// PHẦN 4: BỘ LỌC TÌM KIẾM
 // ===================================================================================
 
-function __custom_search_by_title_smart( $search, $wp_query ) {
+function __custom_search_by_title_only( $search, $wp_query ) {
     global $wpdb;
     if ( ! is_admin() && $wp_query->is_main_query() && $wp_query->is_search() ) {
         $search_term = $wp_query->query_vars['s'];
         if ( empty( $search_term ) ) return $search;
+
         $search_terms = explode( ' ', $search_term );
         $search_conditions = [];
+
         foreach ( $search_terms as $term ) {
             $term = trim( $term );
             if ( !empty($term) ) {
                 $search_conditions[] = $wpdb->prepare("{$wpdb->posts}.post_title LIKE %s", '%' . $wpdb->esc_like( $term ) . '%');
             }
         }
+
         if ( !empty($search_conditions) ) {
             $search = " AND ( " . implode( ' AND ', $search_conditions ) . " )";
             $search .= " AND ({$wpdb->posts}.post_status = 'publish')";
@@ -361,4 +424,4 @@ function __custom_search_by_title_smart( $search, $wp_query ) {
     }
     return $search;
 }
-add_filter( 'posts_search', '__custom_search_by_title_smart', 10, 2 );
+add_filter( 'posts_search', '__custom_search_by_title_only', 10, 2 );
